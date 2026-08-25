@@ -1,0 +1,203 @@
+/* Kitchen-scrapbook retheme: newsprint cream stock, cocoa ink, paprika as
+   the interactive spot colour, ochre as the rarer second. Overrides the
+   generic Broadsheet design-system tokens from tokens.css. */
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap');
+
+:root {
+  --color-bg: #faf7f1;
+  --color-surface: #ece2ce;
+  --color-text: #2b1f18;
+  --color-divider: color-mix(in srgb, #2b1f18 18%, transparent);
+
+  --color-neutral-100: #faf4e9;
+  --color-neutral-200: #efe7d7;
+  --color-neutral-300: #ded3bd;
+  --color-neutral-400: #c3b59a;
+  --color-neutral-500: #a3947b;
+  --color-neutral-600: #857662;
+  --color-neutral-700: #665b4b;
+  --color-neutral-800: #4a4136;
+  --color-neutral-900: #302921;
+
+  --color-accent: #b8462b;
+  --color-accent-100: #fbeade;
+  --color-accent-200: #f6d3bd;
+  --color-accent-300: #eeb194;
+  --color-accent-400: #e08a66;
+  --color-accent-500: #cc6440;
+  --color-accent-600: #a63d24;
+  --color-accent-700: #86301c;
+  --color-accent-800: #652415;
+  --color-accent-900: #41170d;
+
+  --color-accent-2: #8a6a12;
+  --color-accent-2-100: #f8f0d7;
+  --color-accent-2-200: #f0e0ae;
+  --color-accent-2-300: #e2c877;
+  --color-accent-2-400: #cfab41;
+  --color-accent-2-500: #b58f1c;
+  --color-accent-2-600: #9a7712;
+  --color-accent-2-700: #7d600e;
+  --color-accent-2-800: #5f480b;
+  --color-accent-2-900: #3c2d07;
+
+  --color-process-yellow: #dfa22c;
+  --paper-wash: 0.4;
+}
+
+html, body { margin: 0; background: var(--color-bg); }
+#root { min-height: 100vh; }
+
+body {
+  background-image:
+    radial-gradient(circle at 10% 6%, color-mix(in srgb, #dfa22c calc(11% * var(--paper-wash, 0.4)), transparent), transparent 52%),
+    radial-gradient(circle at 92% 68%, color-mix(in srgb, #b8462b calc(8% * var(--paper-wash, 0.4)), transparent), transparent 48%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.15'/%3E%3C/svg%3E");
+  background-attachment: fixed, fixed, fixed;
+}
+a:hover { color: var(--color-accent-700); }
+input[type=checkbox], input[type=radio], input[type=date], input[type=range], progress {
+  accent-color: var(--color-accent);
+}
+select.input { appearance: none; }
+
+/* ── app shell ── */
+.app-shell {
+  min-height: 100vh; color: var(--color-text); font-family: var(--font-body);
+  display: grid; grid-template-columns: 274px minmax(0, 1fr);
+  background-color: #fffcf5;
+}
+.sidebar {
+  border-right: 1px solid var(--color-divider); padding: 26px 24px 40px;
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  background-color: #efeae4; display: flex; flex-direction: column;
+}
+.content { padding: 0 0 90px; min-width: 960px; }
+.page { padding: 30px 52px 0; }
+
+/* ── shared multi-column layouts ── */
+.grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 64px; align-items: start; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 44px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 34px; }
+.split-hero { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 52px; padding: 48px 0 0; align-items: start; }
+.split-index { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 64px; align-items: start; }
+.split-faq { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); gap: 56px; align-items: start; }
+.sticky-side { position: sticky; top: 26px; }
+.search-layout { display: grid; grid-template-columns: minmax(228px, 272px) minmax(430px, 1fr); gap: 52px; align-items: start; }
+.recipe-layout { display: grid; grid-template-columns: minmax(430px, 1.5fr) minmax(250px, 300px); gap: 56px; align-items: start; }
+.list-layout { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(240px, 300px); gap: 60px; align-items: start; }
+.cupboard-layout { display: grid; grid-template-columns: minmax(300px, 380px) minmax(420px, 1fr); gap: 56px; align-items: start; }
+
+.result-row { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(170px, 190px); gap: 32px; padding: 24px 0; border-bottom: 1px solid var(--color-divider); align-items: start; }
+.ingredient-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--color-divider); align-items: baseline; }
+.step-row { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 20px; padding: 0 0 26px; align-items: start; }
+.shopping-row { display: grid; grid-template-columns: 22px 118px minmax(160px, 1fr); gap: 16px; align-items: baseline; padding: 13px 6px; border-bottom: 1px solid var(--color-divider); cursor: pointer; }
+.pantry-match-row { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 28px; padding: 22px 0; border-bottom: 1px solid var(--color-divider); align-items: start; }
+.queue-row { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(190px, 220px); gap: 36px; padding: 22px 0; border-bottom: 1px solid var(--color-divider); align-items: start; }
+.rejected-row { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(190px, 230px); gap: 36px; padding: 22px 0; border-bottom: 1px solid var(--color-divider); align-items: start; }
+.ask-row { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(220px, 280px); gap: 36px; padding: 22px 0; border-bottom: 1px solid var(--color-divider); align-items: start; }
+.account-row { display: grid; grid-template-columns: minmax(0, 1fr) 150px 210px; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--color-divider); align-items: center; }
+.rating-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px 170px; gap: 24px; padding: 16px 0; border-bottom: 1px solid var(--color-divider); align-items: baseline; }
+.contribution-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px 200px 150px; gap: 24px; padding: 18px 0; border-bottom: 1px solid var(--color-divider); align-items: baseline; }
+.ask-me-row { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 32px; padding: 20px 0; border-bottom: 1px solid var(--color-divider); align-items: start; }
+
+/* ── hero banner (home / about) ── */
+.hero-banner { position: relative; overflow: hidden; border-bottom: 1px solid var(--color-divider); }
+.hero-banner img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.hero-banner__fallback {
+  width: 100%; height: 100%;
+  background:
+    radial-gradient(circle at 20% 30%, color-mix(in srgb, var(--color-accent) 30%, transparent), transparent 60%),
+    radial-gradient(circle at 80% 70%, color-mix(in srgb, var(--color-accent-2) 24%, transparent), transparent 55%),
+    var(--color-surface);
+}
+.hero-banner__caption {
+  position: absolute; inset: auto 0 0 0; padding: 30px 52px 26px;
+  background: linear-gradient(to top, color-mix(in srgb, var(--color-text) 88%, transparent), color-mix(in srgb, var(--color-text) 55%, transparent) 62%, transparent);
+}
+.hero-banner__kicker { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-accent-200); margin-bottom: 6px; }
+.hero-banner__title { font-family: var(--font-heading); font-weight: 600; line-height: 0.98; letter-spacing: -0.03em; color: #fffdf8; }
+
+/* ── narrow screens: the sidebar becomes a masthead, every two-column
+   spread stacks, and the fixed-width rows tighten or flow ── */
+/* between 1000px and 1240px the sidebar stays, but the content column
+   stops insisting on 960px and the wide spreads stack */
+@media (min-width: 1001px) and (max-width: 1240px) {
+  .content { min-width: 0 !important; }
+  .app-shell { grid-template-columns: 232px minmax(0, 1fr) !important; }
+  .grid-2, .split-hero, .split-index, .split-faq, .search-layout, .recipe-layout, .list-layout, .cupboard-layout {
+    grid-template-columns: minmax(0, 1fr) !important; gap: 30px !important;
+  }
+  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .page { padding-left: 30px !important; padding-right: 30px !important; }
+  .cutouts { display: none !important; }
+  .sticky-side { position: static !important; }
+  .result-row, .pantry-match-row { display: flex !important; flex-wrap: wrap; gap: 3px 18px !important; }
+  .queue-row, .rejected-row, .ask-row { display: flex !important; flex-wrap: wrap; gap: 3px 18px !important; }
+}
+
+@media (max-width: 1000px) {
+  .app-shell { grid-template-columns: minmax(0, 1fr) !important; }
+  .sidebar {
+    position: static !important; height: auto !important; overflow: visible !important;
+    border-right: 0 !important; border-bottom: 1px solid var(--color-divider) !important;
+    padding: 16px 16px 20px !important;
+  }
+  .content { min-width: 0 !important; }
+  .page { padding-left: 16px !important; padding-right: 16px !important; }
+  .grid-2, .grid-3, .grid-4, .split-hero, .split-index, .split-faq,
+  .search-layout, .recipe-layout, .list-layout, .cupboard-layout {
+    grid-template-columns: minmax(0, 1fr) !important; gap: 24px !important;
+  }
+  .result-row, .pantry-match-row, .queue-row, .rejected-row, .ask-row,
+  .rating-row, .contribution-row, .ask-me-row {
+    display: flex !important; flex-wrap: wrap; gap: 3px 16px !important;
+  }
+  .sticky-side { position: static !important; }
+  .cutouts { display: none !important; }
+  .sidebar-nav { flex-direction: row !important; flex-wrap: wrap; gap: 4px 6px !important; margin-bottom: 14px !important; }
+  .sidebar-editor-nav, .sidebar-account { display: none !important; }
+  .hero-banner { height: 200px !important; }
+  .hero-banner__caption { padding: 18px 16px 16px !important; }
+  .hero-banner__title { font-size: clamp(26px, 7.5vw, 40px) !important; }
+  h1 { font-size: clamp(28px, 8.5vw, 42px) !important; line-height: 1.07 !important; }
+  h2 { font-size: clamp(21px, 6vw, 28px) !important; }
+  h3 { font-size: clamp(18px, 5vw, 22px) !important; }
+  .dialog-backdrop { align-items: flex-start !important; overflow-y: auto !important; padding: 20px 12px !important; }
+  .dialog { max-width: calc(100vw - 24px) !important; max-height: calc(100vh - 40px) !important; overflow-y: auto !important; }
+  .btn { min-height: 44px; }
+}
+
+/* Printing: only the recipe itself goes on paper — no sidebar, no buttons,
+   no rating, no notes form. The page shell collapses to a single column. */
+@media print {
+  @page { margin: 11mm 12mm; }
+  .print-hide { display: none !important; }
+  .print-shell { display: block !important; min-height: 0 !important; background: #fff !important; }
+  .print-content { min-width: 0 !important; padding: 0 !important; }
+  .print-page { padding: 0 !important; max-width: none !important; }
+  .print-grid { display: block !important; }
+  .print-side { position: static !important; margin-top: 14pt; break-inside: avoid; }
+  .print-keep { break-inside: avoid; }
+  .print-page, .print-page p, .print-page span, .print-page div, .print-page label {
+    font-size: 12pt !important; line-height: 1.32 !important;
+  }
+  .print-page p, .print-page div { max-width: none !important; }
+  .print-page h1 { font-size: 24pt !important; line-height: 1.02 !important; margin: 0 0 6pt !important; }
+  .print-page h2 { font-size: 14pt !important; margin: 0 0 5pt !important; }
+  .print-page h6 { font-size: 9pt !important; }
+  .print-page .tag { font-size: 9pt !important; padding: 1pt 4pt !important; }
+  .print-page .cmyk-num { font-size: 15pt !important; }
+  .print-page .cmyk-num .plate { display: none !important; }
+  .print-page .print-ing { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)) !important; gap: 0 14pt !important; }
+  .print-page .print-ing > div { padding: 2.5pt 0 !important; grid-template-columns: 64pt minmax(0, 1fr) !important; gap: 6pt !important; }
+  .print-page .print-steps > div { padding: 0 0 7pt !important; grid-template-columns: 22pt minmax(0, 1fr) !important; gap: 8pt !important; break-inside: avoid; }
+  .print-page .print-sec { padding: 12pt 0 0 !important; }
+  .print-page image-slot, .print-page .image-slot { break-inside: avoid; }
+  .print-page .print-photos > div { width: 130pt !important; height: 92pt !important; border-width: 2pt !important; }
+  .print-page .print-stepphoto { width: 110pt !important; height: 74pt !important; border-width: 2pt !important; margin-top: 4pt !important; }
+  .print-side > div { border-top-width: 2pt !important; padding-top: 6pt !important; }
+  .print-side .print-keep { padding-top: 8pt !important; }
+  a { color: inherit !important; text-decoration: none !important; }
+  * { box-shadow: none !important; }
+}
