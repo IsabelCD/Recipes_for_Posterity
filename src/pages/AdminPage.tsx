@@ -37,7 +37,7 @@ export function AdminPage() {
               </div>
               <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 24, lineHeight: 1.15, marginBottom: 4 }}>{p.title}</div>
               <div style={{ fontSize: 14, marginBottom: 8 }} className="text-muted">
-                Author: {p.author} · submitted by {p.submitter} · {p.portions} portions · {timeText(p.time)} · difficulty {p.difficulty} of 5 · visible to: {accessWords((p.access || 'public') as Access).toLowerCase()}
+                Author: {p.author} · submitted by {p.submitter} · {p.portions} portions · {timeText(p.time)} · difficulty {p.difficulty} of 5 · written in {p.language || 'English'} · visible to: {accessWords((p.access || 'public') as Access).toLowerCase()}
               </div>
               <div style={{ fontSize: 15, lineHeight: 1.5, maxWidth: '64ch' }}>{p.summary}</div>
               {!!p.source && <div style={{ fontSize: 14, marginTop: 6 }}>Submitted link: <a href={p.source} target="_blank" rel="noreferrer">{host(p.source)}</a></div>}

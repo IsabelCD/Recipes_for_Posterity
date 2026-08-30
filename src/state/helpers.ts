@@ -24,6 +24,7 @@ export function fmt(n: number): string {
 const MEAL_ICONS: Record<string, string> = {
   Breakfast: 'ph-coffee', Starter: 'ph-bowl-food', 'Main dish': 'ph-cooking-pot',
   'Side dish': 'ph-carrot', Dessert: 'ph-cake', Baking: 'ph-bread', Snack: 'ph-cookie',
+  Drink: 'ph-wine',
 };
 
 export function mealIcon(meal: string): string {

@@ -2,7 +2,7 @@ import type { PendingSubmission, RejectedSubmission, Takedown } from '../types';
 
 export const PENDING: PendingSubmission[] = [
   { id: 'p-caldo', title: 'Caldo Verde', author: 'Rosa Marques', submitter: 'Ana Ribeiro',
-    nationality: 'Portuguese', meal: 'Starter', tastes: ['Umami'], time: 40, difficulty: 1, portions: 6,
+    nationality: 'Portuguese', meal: 'Starter', language: 'English', tastes: ['Umami'], time: 40, difficulty: 1, portions: 6,
     source: '', wait: 'Submitted 2 days ago',
     summary: 'Potato and kale soup with a slice of chouriço. Six ingredients, eight steps, quantities given for six portions.',
     flag: '',
@@ -37,7 +37,7 @@ export const PENDING: PendingSubmission[] = [
       [{ q: 30, u: 'ml', n: 'olive oil' }],
     ] },
   { id: 'p-tres', title: 'Tres Leches Cake', author: 'unknown', submitter: 'Marek Nowak',
-    nationality: 'Nicaraguan', meal: 'Dessert', tastes: ['Sweet'], time: 90, difficulty: 3, portions: 12,
+    nationality: 'Nicaraguan', meal: 'Dessert', language: 'English', tastes: ['Sweet'], time: 90, difficulty: 3, portions: 12,
     source: 'https://example.org/video/tres-leches', wait: 'Submitted 5 hours ago',
     summary: 'Sponge soaked in three milks. Submitter saw it in a video and has not named an author.',
     flag: 'Needs checking: no author named, and a link to someone else’s video was submitted.',
@@ -77,7 +77,7 @@ export const PENDING: PendingSubmission[] = [
 // The reject pile: nothing is thrown away, so an editor can change their mind.
 export const INITIAL_REJECTED: RejectedSubmission[] = [{
   id: 'p-arroz', title: 'Arroz de Pato', author: 'Fernanda Alves', submitter: 'Ana Ribeiro',
-  nationality: 'Portuguese', meal: 'Main dish', tastes: ['Umami'], time: 120, difficulty: 4, portions: 6,
+  nationality: 'Portuguese', meal: 'Main dish', language: 'English', tastes: ['Umami'], time: 120, difficulty: 4, portions: 6,
   source: '', wait: 'Submitted 9 days ago',
   summary: 'Duck rice baked with chouriço and orange zest. The method is there but the duck is never weighed.',
   flag: '', ingredients: [], steps: [], uses: [],

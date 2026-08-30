@@ -4,7 +4,9 @@ export const TASTES = [
 ];
 
 export const MEALS = [
-  'Breakfast', 'Starter', 'Main dish', 'Side dish', 'Dessert', 'Baking', 'Snack',
+  'Breakfast', 'Starter', 'Main dish', 'Side dish', 'Dessert', 'Baking', 'Snack', 'Drink',
 ];
+
+export const LANGUAGES = ['Portuguese', 'English'] as const;
 
 export const TODAY = '2026-08-15';

@@ -8,6 +8,7 @@ import { INITIAL_PANTRY } from '../data/content';
 export function freshForm(submitter = ''): FormState {
   return {
     title: '', author: '', submitter, source: '', nationality: '', meal: 'Main dish',
+    language: 'English',
     tastes: [], portions: 4, time: 30, difficulty: 2, notes: '', access: 'public',
     ingredients: [{ q: '', u: '', n: '' }, { q: '', u: '', n: '' }, { q: '', u: '', n: '' }],
     steps: [{ text: '', uses: [] }, { text: '', uses: [] }, { text: '', uses: [] }],
@@ -24,9 +25,10 @@ export function initialAppState(): AppState {
     editorDraft: '', editorError: '',
     recipes: RECIPES, pending: PENDING,
     takedowns: INITIAL_TAKEDOWNS,
-    f: { q: '', nationality: 'All', meal: 'All', author: 'All', since: 'Any time', rating: 'Any', time: 'Any', difficulty: 'Any', sort: 'Highest rated', tasteList: [] },
+    f: { q: '', nationality: 'All', meal: 'All', language: 'All', author: 'All', since: 'Any time', rating: 'Any', time: 'Any', difficulty: 'Any', sort: 'Highest rated', tasteList: [] },
     circle: [], circleDraft: '', circleError: '',
     myRatings: {}, extraComments: {}, commentDraft: '', portionsById: {},
+    commentReplies: {}, replyDrafts: {}, openReplies: {},
     pantry: INITIAL_PANTRY.slice(),
     pantryQuery: '', pantryOnlyComplete: false,
     rejected: INITIAL_REJECTED,

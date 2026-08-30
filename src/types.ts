@@ -1,5 +1,6 @@
 export type Access = 'public' | 'circle' | 'owner';
 export type Role = 'reader' | 'editor';
+export type Language = 'Portuguese' | 'English';
 
 export interface Ingredient {
   q: number;
@@ -15,6 +16,12 @@ export interface RecipeComment {
   rating?: number;
 }
 
+export interface CommentReply {
+  by: string;
+  when: string;
+  text: string;
+}
+
 export interface Recipe {
   id: string;
   title: string;
@@ -22,6 +29,7 @@ export interface Recipe {
   submitter: string;
   nationality: string;
   meal: string;
+  language: Language;
   tastes: string[];
   time: number;
   difficulty: number;
@@ -52,6 +60,7 @@ export interface PendingSubmission {
   submitter: string;
   nationality: string;
   meal: string;
+  language: Language;
   tastes: string[];
   time: number;
   difficulty: number;
@@ -162,6 +171,7 @@ export interface FormState {
   source: string;
   nationality: string;
   meal: string;
+  language: Language;
   tastes: string[];
   portions: number | string;
   time: number | string;
@@ -177,6 +187,7 @@ export interface Filters {
   q: string;
   nationality: string;
   meal: string;
+  language: string;
   author: string;
   since: string;
   rating: string;
@@ -227,6 +238,9 @@ export interface AppState {
   circleError: string;
   myRatings: Record<string, number>;
   extraComments: Record<string, RecipeComment[]>;
+  commentReplies: Record<string, CommentReply[]>;
+  replyDrafts: Record<string, string>;
+  openReplies: Record<string, boolean>;
   commentDraft: string;
   portionsById: Record<string, number>;
   pantry: string[];

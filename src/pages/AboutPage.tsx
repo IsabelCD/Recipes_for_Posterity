@@ -2,6 +2,8 @@ import { useApp } from '../state/AppStateContext';
 import { HeroBanner } from '../components/HeroBanner';
 import { CmykNumeral } from '../components/CmykNumeral';
 import { visibleRecipes } from '../state/selectors';
+import heroCollage from '../images/Presentation1.png';
+import aboutPhoto from '../images/IMG_3605.jpg';
 
 export function AboutPage() {
   const { state, actions } = useApp();
@@ -20,7 +22,7 @@ export function AboutPage() {
         kicker="About us"
         title="Recipes for Posterity"
         titleSize={46}
-        src="/design-assets/hero-collage.png"
+        src={heroCollage}
         alt="A collage of dishes from the archive"
       />
       <div className="page" style={{ maxWidth: 1180, position: 'relative' }}>
@@ -39,7 +41,7 @@ export function AboutPage() {
           </div>
           <div style={{ width: 402, maxWidth: '100%', height: 272, background: '#b6b0a7', borderRadius: 8, overflow: 'hidden' }}>
             <img
-              src="/design-assets/about-photo.jpg"
+              src={aboutPhoto}
               alt=""
               style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
               onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}

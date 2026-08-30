@@ -5,6 +5,10 @@ import { CmykNumeral } from '../components/CmykNumeral';
 import { PAGES, PURPOSES, TUTORIAL } from '../data/content';
 import { visibleRecipes } from '../state/selectors';
 import { mealIcon, stars, timeText, dateLabel } from '../state/helpers';
+import heroCollage from '../images/Presentation1.png';
+import waffleCutout from '../images/Picturewaffle.jpg';
+import tomatoesCutout from '../images/Picture3.jpg';
+import cakeCutout from '../images/eat-the-rainbow-chopped-salad-with-basil-mozzarella-beauty-184-278133-4000x4000-ef8f3f0ad7134d2b860c51f5e7b38ce5.jpg';
 
 export function HomePage() {
   const { state, actions } = useApp();
@@ -23,7 +27,7 @@ export function HomePage() {
         kicker="Family recipe archive"
         title="Recipes for Posterity"
         titleSize={52}
-        src="/design-assets/hero-collage.png"
+        src={heroCollage}
         alt="A collage of dishes from the archive"
       />
       <div className="page" style={{ maxWidth: 1180, position: 'relative' }}>
@@ -47,10 +51,10 @@ export function HomePage() {
           </div>
           <div className="cutouts" style={{ display: 'flex', flexDirection: 'column', gap: 30, alignItems: 'flex-end', opacity: 0.75 }}>
             <div style={{ width: 286, height: 230, rotate: '-5deg', border: '7px solid #fffdf8', boxShadow: '0 8px 18px color-mix(in srgb, var(--color-text) 20%, transparent)' }}>
-              <ImageSlot id="cut-waffle" shape="rect" placeholder="Drop a waffle cut-out" />
+              <ImageSlot id="cut-waffle" shape="rect" placeholder="Drop a waffle cut-out" src={waffleCutout} />
             </div>
             <div style={{ width: 220, height: 220, rotate: '4deg', border: '7px solid #fffdf8', boxShadow: '0 8px 18px color-mix(in srgb, var(--color-text) 20%, transparent)' }}>
-              <ImageSlot id="cut-tomatoes" shape="rect" placeholder="Drop a tomato cut-out" />
+              <ImageSlot id="cut-tomatoes" shape="rect" placeholder="Drop a tomato cut-out" src={tomatoesCutout} />
             </div>
           </div>
         </div>
@@ -92,7 +96,7 @@ export function HomePage() {
             <h6 style={{ color: 'var(--color-accent)', margin: '0 0 10px' }}>Contents</h6>
             <h2 style={{ fontSize: 30, margin: '0 0 16px' }}>Where everything is</h2>
             <p style={{ fontSize: 15, maxWidth: '32ch' }} className="text-muted">The same list is in the bar on the left, on every page. Five more pages are being built and are listed there too.</p>
-            <ImageSlot id="cut-cake" shape="rect" placeholder="Drop a cake cut-out" style={{ width: 314, height: 283 }} />
+            <ImageSlot id="cut-cake" shape="rect" placeholder="Drop a cake cut-out" src={cakeCutout} style={{ width: 314, height: 283 }} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {indexItems.map((row) => (

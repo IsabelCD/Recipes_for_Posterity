@@ -1,6 +1,6 @@
 import { useApp } from '../state/AppStateContext';
 import { ImageSlot } from '../components/ImageSlot';
-import { MEALS, TASTES } from '../data/taxonomy';
+import { MEALS, TASTES, LANGUAGES } from '../data/taxonomy';
 import { ACCESS_OPTIONS } from '../data/content';
 import { me } from '../state/selectors';
 
@@ -92,6 +92,23 @@ export function ContributePage() {
             <select className="input" value={form.meal} onChange={(e) => actions.setFormField('meal', e.target.value)}>
               {MEALS.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
+          </div>
+          <div className="field">
+            <label>What language is it written in?</label>
+            <div className="seg">
+              {LANGUAGES.map((lang) => (
+                <button
+                  key={lang}
+                  type="button"
+                  className="seg-opt"
+                  aria-pressed={form.language === lang}
+                  onClick={() => actions.setFormField('language', lang)}
+                  style={form.language === lang ? { background: 'var(--color-accent)', color: 'var(--color-bg)' } : undefined}
+                >
+                  {lang}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="field" style={{ gridColumn: '1 / -1' }}>
             <label>How does it taste? Pick as many as apply</label>
@@ -288,6 +305,7 @@ export function ContributePage() {
                 { k: 'Original link', v: form.source || 'none' },
                 { k: 'Nationality', v: form.nationality || 'not filled in' },
                 { k: 'Type of meal', v: form.meal },
+                { k: 'Language', v: form.language },
                 { k: 'Taste', v: form.tastes.length ? form.tastes.join(', ') : 'not filled in' },
                 { k: 'Portions', v: String(form.portions) },
                 { k: 'Time', v: `${form.time} minutes` },

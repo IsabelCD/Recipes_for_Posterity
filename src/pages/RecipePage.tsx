@@ -45,6 +45,7 @@ export function RecipePage() {
               <i className={`ph-duotone ${mealIcon(r.meal)}`} style={{ fontSize: 15, color: 'var(--color-accent-700)' }} aria-hidden="true" />{r.meal}
             </span>
             <span className="tag tag-outline" style={{ whiteSpace: 'nowrap' }}>{r.tastes.join(' · ')}</span>
+            <span className="tag tag-neutral">{r.language}</span>
             {restricted && <span className="tag tag-accent-2">{accessWords(accessOf(state, r))}</span>}
           </div>
           <h1 style={{ fontSize: 56, lineHeight: 1, letterSpacing: '-0.03em', margin: '0 0 16px', maxWidth: '20ch' }}>{r.title}</h1>
@@ -164,16 +165,55 @@ export function RecipePage() {
               <span className="text-muted" style={{ fontSize: 14 }}>{comments.length === 1 ? '1 note' : `${comments.length} notes`}</span>
             </div>
             <p style={{ fontSize: 15, margin: '0 0 20px', maxWidth: '58ch' }} className="text-muted">Substitutions, timings, what went wrong. Notes stay attached to the recipe for whoever cooks it next.</p>
-            {comments.map((c, i) => (
-              <div key={i} style={{ padding: '16px 0', borderBottom: '1px solid var(--color-divider)' }}>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', marginBottom: 4 }}>
-                  <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 16 }}>{c.by}</span>
-                  <span style={{ fontSize: 13 }} className="text-muted">{c.when}</span>
-                  <span style={{ fontSize: 15, color: 'var(--color-accent)', letterSpacing: '0.06em', marginLeft: 'auto' }}>{c.rating ? stars(c.rating) : ''}</span>
+            {comments.map((c, i) => {
+              const commentKey = `${r.id}__${i}`;
+              const replies = state.commentReplies[commentKey] || [];
+              const replyOpen = !!state.openReplies[commentKey];
+              return (
+                <div key={i} style={{ padding: '16px 0', borderBottom: '1px solid var(--color-divider)' }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', marginBottom: 4 }}>
+                    <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 16 }}>{c.by}</span>
+                    <span style={{ fontSize: 13 }} className="text-muted">{c.when}</span>
+                    <span style={{ fontSize: 15, color: 'var(--color-accent)', letterSpacing: '0.06em', marginLeft: 'auto' }}>{c.rating ? stars(c.rating) : ''}</span>
+                  </div>
+                  <p style={{ fontSize: 16, lineHeight: 1.55, margin: 0, maxWidth: '66ch' }}>{c.text}</p>
+
+                  {replies.length > 0 && (
+                    <div style={{ marginTop: 12, paddingLeft: 20, borderLeft: '2px solid var(--color-divider)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {replies.map((rp, j) => (
+                        <div key={j}>
+                          <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', marginBottom: 2 }}>
+                            <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 14 }}>{rp.by}</span>
+                            <span style={{ fontSize: 12 }} className="text-muted">{rp.when}</span>
+                          </div>
+                          <p style={{ fontSize: 15, lineHeight: 1.5, margin: 0, maxWidth: '62ch' }}>{rp.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {state.signedIn && (
+                    <div style={{ marginTop: 10 }}>
+                      <button className="btn btn-ghost" onClick={() => actions.toggleReplyBox(commentKey)} style={{ paddingLeft: 0, fontSize: 13 }}>
+                        {replyOpen ? 'Cancel' : 'Reply'}
+                      </button>
+                      {replyOpen && (
+                        <div style={{ maxWidth: '60ch' }}>
+                          <textarea
+                            className="input"
+                            value={state.replyDrafts[commentKey] || ''}
+                            onChange={(e) => actions.setReplyDraft(commentKey, e.target.value)}
+                            placeholder={`Reply to ${c.by.split(' ')[0]}…`}
+                            style={{ fontSize: 14, minHeight: 60 }}
+                          />
+                          <button className="btn btn-primary" onClick={() => actions.postReply(commentKey)} style={{ marginTop: 8 }}>Post reply</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <p style={{ fontSize: 16, lineHeight: 1.55, margin: 0, maxWidth: '66ch' }}>{c.text}</p>
-              </div>
-            ))}
+              );
+            })}
             <div style={{ padding: '20px 0 0', maxWidth: '60ch' }}>
               {!state.signedIn && (
                 <>

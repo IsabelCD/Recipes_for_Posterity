@@ -41,6 +41,9 @@ export interface AppActions {
   clearMyRating(id: string): void;
   setCommentDraft(v: string): void;
   postComment(id: string): void;
+  toggleReplyBox(commentKey: string): void;
+  setReplyDraft(commentKey: string, v: string): void;
+  postReply(commentKey: string): void;
   toggleSelect(id: string): void;
   printPage(): void;
   openReport(): void;
@@ -197,6 +200,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           submitter: anySrc.submitter || '', source: anySrc.source || '',
           nationality: anySrc.nationality === 'Not given' ? '' : (anySrc.nationality || ''),
           meal: anySrc.meal || 'Main dish',
+          language: anySrc.language || 'English',
           tastes: (anySrc.tastes || []).filter((t) => t !== 'Not given'),
           portions: anySrc.portions || 4, time: anySrc.time || 30, difficulty: anySrc.difficulty || 2,
           notes: anySrc.notes || '', access: accessOf(s, anySrc as never),
@@ -216,6 +220,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         title: form.title.trim(), author: form.author.trim() || 'unknown',
         submitter: form.submitter.trim() || 'anonymous',
         nationality: form.nationality.trim() || 'Not given', meal: form.meal,
+        language: form.language,
         tastes: form.tastes.length ? form.tastes : ['Not given'],
         time: Number(form.time) || 30, difficulty: Number(form.difficulty) || 2,
         portions: Number(form.portions) || 4, source: form.source.trim(),
@@ -237,7 +242,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         ...s,
         recipes: s.recipes.concat([{
           id: p.id.replace('p-', 'r-'), title: p.title, author: p.author, submitter: p.submitter,
-          nationality: p.nationality, meal: p.meal, tastes: p.tastes, time: p.time,
+          nationality: p.nationality, meal: p.meal, language: p.language || 'English', tastes: p.tastes, time: p.time,
           difficulty: p.difficulty, rating: 0, votes: 0, date: TODAY, portions: p.portions,
           source: p.source, blurb: p.blurb || p.summary, notes: p.notes || '',
           access: p.access || 'public', ownerEmail: p.ownerEmail || '',
@@ -368,7 +373,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const list = s.f.tasteList || [];
         return { ...s, f: { ...s.f, tasteList: list.indexOf(taste) === -1 ? list.concat([taste]) : list.filter((x) => x !== taste) } };
       }),
-      clearFilters: () => setState((s) => ({ ...s, f: { q: '', nationality: 'All', meal: 'All', author: 'All', since: 'Any time', rating: 'Any', time: 'Any', difficulty: 'Any', sort: 'Highest rated', tasteList: [] } })),
+      clearFilters: () => setState((s) => ({ ...s, f: { q: '', nationality: 'All', meal: 'All', language: 'All', author: 'All', since: 'Any time', rating: 'Any', time: 'Any', difficulty: 'Any', sort: 'Highest rated', tasteList: [] } })),
 
       incPortions: (id, base) => setState((s) => ({ ...s, portionsById: { ...s.portionsById, [id]: Math.min(24, (s.portionsById[id] || base) + 1) } })),
       decPortions: (id, base) => setState((s) => ({ ...s, portionsById: { ...s.portionsById, [id]: Math.max(1, (s.portionsById[id] || base) - 1) } })),
@@ -387,6 +392,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (!t) { flash('Write something first.'); return; }
         setState((s2) => ({ ...s2, extraComments: { ...s2.extraComments, [id]: (s2.extraComments[id] || []).concat([{ by: me(s2).name, when: 'just now', text: t, rating: s2.myRatings[id] || 0 }]) }, commentDraft: '' }));
         flash('Your note has been added.');
+      },
+      toggleReplyBox: (commentKey) => {
+        if (!stateRef.current.signedIn) return;
+        setState((s) => ({ ...s, openReplies: { ...s.openReplies, [commentKey]: !s.openReplies[commentKey] } }));
+      },
+      setReplyDraft: (commentKey, v) => setState((s) => ({ ...s, replyDrafts: { ...s.replyDrafts, [commentKey]: v } })),
+      postReply: (commentKey) => {
+        const s = stateRef.current;
+        if (!s.signedIn) return;
+        const t = (s.replyDrafts[commentKey] || '').trim();
+        if (!t) { flash('Write something first.'); return; }
+        setState((s2) => ({
+          ...s2,
+          commentReplies: { ...s2.commentReplies, [commentKey]: (s2.commentReplies[commentKey] || []).concat([{ by: me(s2).name, when: 'just now', text: t }]) },
+          replyDrafts: { ...s2.replyDrafts, [commentKey]: '' },
+          openReplies: { ...s2.openReplies, [commentKey]: false },
+        }));
+        flash('Your reply has been added.');
       },
       toggleSelect,
       printPage: () => window.print(),
@@ -453,7 +476,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const entry: PendingSubmission = {
           id: `p-${Date.now()}`, title: form.title.trim(), author: form.author.trim() || 'unknown',
           submitter: form.submitter.trim() || 'anonymous', nationality: form.nationality.trim() || 'Not given',
-          meal: form.meal, tastes: form.tastes.length ? form.tastes : ['Not given'],
+          meal: form.meal, language: form.language, tastes: form.tastes.length ? form.tastes : ['Not given'],
           time: Number(form.time) || 30, difficulty: Number(form.difficulty) || 2,
           portions: Number(form.portions) || 4, source: form.source.trim(), wait: 'Submitted just now',
           access: form.access || 'public', ownerEmail: myEmail(s),

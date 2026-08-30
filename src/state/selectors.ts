@@ -68,6 +68,7 @@ export function filtered(state: AppState): Recipe[] {
     }
     if (f.nationality !== 'All' && r.nationality !== f.nationality) return false;
     if (f.meal !== 'All' && r.meal !== f.meal) return false;
+    if (f.language !== 'All' && r.language !== f.language) return false;
     if (f.author !== 'All' && r.author !== f.author) return false;
     if (f.since !== 'Any time') {
       const days = f.since === 'Last 30 days' ? 30 : f.since === 'Last 90 days' ? 90 : 365;

@@ -27,8 +27,9 @@ function shapeStyle(shape: Shape, radius: number): CSSProperties {
 export function ImageSlot({ id, shape = 'rounded', radius = 12, placeholder = 'Drop an image', src, style }: ImageSlotProps) {
   const [dropped, setDropped] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [srcBroken, setSrcBroken] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const shown = dropped || src;
+  const shown = dropped || (src && !srcBroken ? src : undefined);
 
   const acceptFile = (file: File | undefined) => {
     if (!file || !file.type.startsWith('image/')) return;
@@ -55,7 +56,7 @@ export function ImageSlot({ id, shape = 'rounded', radius = 12, placeholder = 'D
         style={{ display: 'none' }}
         onChange={(e) => acceptFile(e.target.files?.[0])}
       />
-      {shown ? <img src={shown} alt="" /> : <span>{placeholder}</span>}
+      {shown ? <img src={shown} alt="" onError={() => setSrcBroken(true)} /> : <span>{placeholder}</span>}
     </div>
   );
 }

@@ -38,8 +38,8 @@ src/
                              from the Claude Design import) + theme.css
                              (the site's retheme, layout classes, responsive
                              and print rules)
-public/design-assets/       where to drop the two photographs the design
-                             import couldn't recover (see below)
+  images/                   real photographs, imported directly by the
+                             pages that use them (Vite bundles + hashes them)
 
 design-reference/           the original Claude Design output — kept as
                              reference only, not used by the app at runtime
@@ -60,15 +60,24 @@ browser tab, seeded from `src/data/*`:
   cookies) — this keeps the mock model honest about what will need real
   persistence later.
 
-## Known gap: two photographs
+## Images
 
-`uploads/Presentation1.png` (hero banner) and `img_3605-mt74qexg-t4zo.jpg`
-(About page photo) exceeded the design-import tool's 256 KiB file-read cap
-and could not be recovered. The app falls back to a plain gradient panel
-until real files are added at:
+`src/images/` holds the real photographs, imported directly (as ES
+modules) by the pages that use them, so Vite bundles, hashes, and
+content-addresses them like any other build asset:
 
-- `public/design-assets/hero-collage.png`
-- `public/design-assets/about-photo.jpg`
+| File | Used by |
+|---|---|
+| `Presentation1.png` | Home hero banner, About hero banner (`HeroBanner`) |
+| `IMG_3605.jpg` | About page photo box |
+| `Picturewaffle.jpg` | Home page cut-out #1 (`cut-waffle`) |
+| `Picture3.jpg` | Home page cut-out #2 (`cut-tomatoes`) |
+| `eat-the-rainbow-…jpg` | Home page cut-out #3 (`cut-cake`, "Where everything is" section) |
+
+`HeroBanner` and `ImageSlot` both still fall back gracefully (plain
+gradient panel / empty drop-a-photo placeholder) if a referenced image is
+ever missing, so a future missing asset degrades rather than breaking the
+page.
 
 ## Design reference
 
