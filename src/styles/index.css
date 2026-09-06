@@ -1,0 +1,20 @@
+@import './tokens.css';
+@import './theme.css';
+
+.image-slot {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--color-neutral-200);
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  font-size: 12px;
+  text-align: center;
+  padding: 8px;
+  cursor: pointer;
+  position: relative;
+}
+.image-slot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.image-slot--dragover { outline: 2px dashed var(--color-accent); outline-offset: -2px; }

@@ -1,0 +1,507 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // A single string looking roughly email-shaped — the same bar the
+    // client's own inner-circle form already holds itself to (see
+    // AppStateContext.tsx's addCircleEmail), just enforced server-side too.
+    function isValidEmail(e) {
+      return e is string && e.matches('^[^@]+@[^@]+\\.[^@]+$');
+    }
+
+    // "Every element of this list looks like an email" — rules support
+    // neither loops nor recursive function calls, so this checks each
+    // position by a fixed index instead of iterating. Capped at 10,
+    // comfortably more than a household's inner circle.
+    function isValidEmailList(l) {
+      return l is list && l.size() <= 10
+        && (l.size() < 1 || isValidEmail(l[0]))
+        && (l.size() < 2 || isValidEmail(l[1]))
+        && (l.size() < 3 || isValidEmail(l[2]))
+        && (l.size() < 4 || isValidEmail(l[3]))
+        && (l.size() < 5 || isValidEmail(l[4]))
+        && (l.size() < 6 || isValidEmail(l[5]))
+        && (l.size() < 7 || isValidEmail(l[6]))
+        && (l.size() < 8 || isValidEmail(l[7]))
+        && (l.size() < 9 || isValidEmail(l[8]))
+        && (l.size() < 10 || isValidEmail(l[9]));
+    }
+
+    // `role` lives on users/{uid} (never on the request), so "is this
+    // requester an editor" needs one extra read — this does NOT depend on
+    // which document is being checked, which matters for why a `list`
+    // rule elsewhere can validate an editor's unconstrained query (see
+    // the per-branch comments under recipes/{recipeId}'s `allow get,
+    // list`, and users/{userId}'s own `allow list` just below).
+    function isEditor() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'editor';
+    }
+
+    // Public user profiles. `role` is the single source of truth for
+    // authorization (see src/state/AppStateContext.tsx) — this rule is
+    // what actually stops anyone from self-assigning "editor", regardless
+    // of what the client sends.
+    match /users/{userId} {
+      allow get: if request.auth != null && request.auth.uid == userId;
+
+      // Phase 7: an editor managing accounts needs to find a user by
+      // email and list who currently holds the editor role — isEditor()
+      // doesn't depend on resource.data at all, so it proves any query
+      // shape safe, the same trick recipes/submissions/asks already use
+      // for an editor's own unconstrained queue query.
+      allow list: if isEditor();
+
+      allow create: if request.auth != null
+        && request.auth.uid == userId
+        // Exactly these fields — no extra, client-supplied data smuggled
+        // onto a profile at creation time.
+        && request.resource.data.keys().hasOnly(['displayName', 'email', 'role', 'createdAt', 'circleEmails'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0
+        // The stored email must be the same account Firebase Auth just
+        // verified — not an arbitrary string.
+        && request.resource.data.email == request.auth.token.email
+        // Every new account is a reader. There is no path from here to
+        // "editor" — that only happens out of band (console/Admin SDK).
+        && request.resource.data.role == 'reader'
+        // Requires the client to write this with serverTimestamp().
+        && request.resource.data.createdAt == request.time
+        // Every account starts with an empty circle — there is no path
+        // to pre-seed someone else's inner circle at signup.
+        && request.resource.data.circleEmails == [];
+
+      // Phase 5: a signed-in user managing their own inner circle (and, in
+      // principle, their display name — nothing in the current UI edits
+      // that yet, but the requirement is about which profile fields may
+      // ever move, not just today's screens). role/email/createdAt can
+      // never move through this path — self-promotion to editor, or
+      // rewriting the account's identity, has to stay impossible no matter
+      // what the client sends. See src/lib/usersRepo.ts.
+      function isOwnProfileUpdate() {
+        return request.auth != null
+          && request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'circleEmails'])
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.displayName is string && request.resource.data.displayName.size() > 0
+          && isValidEmailList(request.resource.data.circleEmails);
+      }
+
+      // Phase 7: an editor promoting or demoting a DIFFERENT account.
+      // Deliberately excludes the caller's own document (an editor giving
+      // up their own role, or reinforcing it, should not go through this
+      // path) — everything except `role` stays exactly as it was, and
+      // `role` can only ever become one of the two real values.
+      function isEditorRoleChange() {
+        return isEditor()
+          && request.auth.uid != userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+          && request.resource.data.role in ['reader', 'editor']
+          && request.resource.data.displayName == resource.data.displayName
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.circleEmails == resource.data.circleEmails;
+      }
+
+      allow update: if isOwnProfileUpdate() || isEditorRoleChange();
+
+      allow delete: if false;
+    }
+
+    // Same public/own/circle/editor visibility test Phase 1 wrote inline
+    // into `recipes/{recipeId}`'s own `allow get, list` — hoisted so
+    // Phase 3's ratings/comments/replies can gate on "can this caller see
+    // the parent recipe" without re-deriving the same four disjuncts.
+    // Takes the recipe data directly (rather than re-`get()`-ing it)
+    // where the caller already has it in scope.
+    function recipeVisible(r) {
+      return r.access == 'public'
+        || (request.auth != null && r.ownerUid == request.auth.uid)
+        || (request.auth != null && request.auth.token.email in r.circleEmails)
+        || isEditor();
+    }
+
+    function recipeVisibleById(rid) {
+      return recipeVisible(get(/databases/$(database)/documents/recipes/$(rid)).data);
+    }
+
+    match /recipes/{recipeId} {
+      // Firestore validates a `list` query against this same condition,
+      // but only as a QUERY-SHAPE proof, not per returned document: it
+      // checks whether the condition is guaranteed true for every
+      // document the query's own filters could possibly match — so each
+      // client query below must line up with exactly one of the four
+      // disjuncts in recipeVisible() (see src/lib/recipesRepo.ts). An
+      // unconstrained query (no matching filter) can't be proven safe
+      // against any of the three data-dependent disjuncts, so it's
+      // rejected for anyone who isn't an editor — `isEditor()` is the one
+      // disjunct that doesn't depend on `resource.data` at all, which is
+      // what lets an editor's fully unconstrained query be proven safe.
+      allow get, list: if recipeVisible(resource.data);
+
+      // Phase 2: publishing a submission creates the real recipe doc —
+      // see the transaction in src/lib/submissionsRepo.ts's
+      // publishSubmission(), paired with a submissions/ delete below.
+      // Only an editor may do this; light shape checks catch an obviously
+      // malformed write without trying to fully re-validate the schema
+      // Phase 1 already trusts the seed script with.
+      allow create: if isEditor()
+        && request.resource.data.title is string && request.resource.data.title.size() > 0
+        && request.resource.data.access in ['public', 'circle', 'owner']
+        && request.resource.data.steps is list && request.resource.data.steps.size() > 0
+        && request.resource.data.ingredients is list;
+
+      // A recipe seeded before ratingSum existed has no such field yet;
+      // treat it as the exact product of its rating/votes rather than 0,
+      // matching the same fallback in src/lib/ratingsRepo.ts's
+      // priorRatingSum(). Accessing r.ratingSum directly when it's absent
+      // would throw and deny the whole rule, hence the `in` check.
+      function priorRatingSum(r) {
+        return ('ratingSum' in r) ? r.ratingSum : r.votes * r.rating;
+      }
+
+      // A rating write's other half: recipes/{id}/ratings/{uid}'s own
+      // create/update (below) and this update happen together in one
+      // client transaction (src/lib/ratingsRepo.ts) — there's no Cloud
+      // Function in this project to recompute the aggregate on a
+      // trusted server. Rules evaluate each document write
+      // independently, so this can only bound the *shape* of the
+      // change, not prove it corresponds to a real rating document:
+      // exactly these three fields move, `votes` moves by at most one
+      // (one rating created or removed), `ratingSum` moves by at most a
+      // single rating's worth (1 to 5), and the three stay internally
+      // consistent (rating == ratingSum / votes). A determined
+      // authenticated user could still forge a plausible-looking step
+      // without a matching rating doc — accepted trade-off of doing
+      // this without a trusted server.
+      function isAggregateUpdate() {
+        return request.auth != null
+          && recipeVisible(resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'votes', 'ratingSum'])
+          && request.resource.data.votes is int && request.resource.data.votes >= 0
+          && request.resource.data.votes >= resource.data.votes - 1
+          && request.resource.data.votes <= resource.data.votes + 1
+          && request.resource.data.ratingSum is number
+          && request.resource.data.ratingSum >= priorRatingSum(resource.data) - 5
+          && request.resource.data.ratingSum <= priorRatingSum(resource.data) + 5
+          && request.resource.data.rating == (request.resource.data.votes > 0 ? request.resource.data.ratingSum / request.resource.data.votes : 0);
+      }
+
+      // Phase 5: the owner keeping their own already-published
+      // circle-access recipes in sync with their current inner circle —
+      // src/lib/usersRepo.ts's setMyCircleEmails batches this together
+      // with the users/{uid} update above whenever the circle changes.
+      // Never touches anything else about the recipe, and never flips
+      // access into or out of 'circle' through this path.
+      function isCircleSync() {
+        return request.auth != null
+          && resource.data.ownerUid == request.auth.uid
+          && resource.data.access == 'circle'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['circleEmails'])
+          && isValidEmailList(request.resource.data.circleEmails);
+      }
+
+      // An editor's content "fix" for an already-published recipe (see
+      // src/lib/recipesRepo.ts's amendRecipe) — the same light shape
+      // checks the recipes/create rule above uses, plus a field allow-list
+      // that keeps ownership, visibility bookkeeping and the rating
+      // aggregate completely out of this path's reach: an editor amending
+      // content can never reassign a recipe, change who can see it via
+      // circleEmails, or move rating/votes/ratingSum/date/blurb/comments.
+      function isEditorContentAmend() {
+        return isEditor()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title', 'author', 'submitter', 'nationality', 'meal', 'tastes', 'time', 'difficulty',
+            'portions', 'source', 'notes', 'access', 'ingredients', 'steps', 'photos',
+            'editedOn', 'editedBy',
+          ])
+          && request.resource.data.title is string && request.resource.data.title.size() > 0
+          && request.resource.data.access in ['public', 'circle', 'owner']
+          && request.resource.data.steps is list && request.resource.data.steps.size() > 0
+          && request.resource.data.ingredients is list;
+      }
+
+      // Amending an already-published recipe's other content is now real
+      // (Phase 8) — previously only the rating aggregate and the owner's
+      // circle sync above could move via update.
+      allow update: if isAggregateUpdate() || isCircleSync() || isEditorContentAmend();
+      // Phase 4: editors can remove a reported recipe, paired with
+      // resolving the report that asked for it (see the reports/
+      // collection below and src/lib/reportsRepo.ts's
+      // removeReportedRecipe transaction).
+      allow delete: if isEditor();
+
+      // Phase 3: one rating per user per recipe, doc id == uid. Rating
+      // or un-rating also updates the recipe's own displayed
+      // rating/votes aggregate, via the isAggregateUpdate() update rule
+      // above — src/lib/ratingsRepo.ts writes both in one transaction.
+      match /ratings/{ratingId} {
+        // `resource` here is the RATING doc, not the recipe — recipeId
+        // is still in scope as the path variable from the parent match,
+        // so parent-recipe visibility goes through recipeVisibleById().
+        function isOwnRating() { return request.auth != null && ratingId == request.auth.uid; }
+
+        allow get: if isOwnRating() && recipeVisibleById(recipeId);
+        allow create, update: if isOwnRating()
+          && recipeVisibleById(recipeId)
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.value is int
+          && request.resource.data.value >= 1 && request.resource.data.value <= 5
+          && request.resource.data.ratedAt == request.time
+          && request.resource.data.keys().hasOnly(['uid', 'value', 'ratedAt']);
+        // No parent-visibility check on delete: removing your own rating
+        // from a recipe you've since lost access to (e.g. dropped from
+        // someone's circle) should still be possible.
+        allow delete: if isOwnRating();
+      }
+
+      // Phase 3: comments now live here with real document IDs, instead
+      // of the old `${recipeId}__${index}` key into local-only state —
+      // see src/lib/commentsRepo.ts. The recipe doc's own seeded
+      // `comments` array (Phase 1) is untouched and keeps displaying
+      // read-only alongside these.
+      match /comments/{commentId} {
+        function isMessageAuthor() { return request.auth != null && request.resource.data.uid == request.auth.uid; }
+        function validMessage() {
+          return isMessageAuthor()
+            && request.resource.data.displayName is string && request.resource.data.displayName.size() > 0
+            && request.resource.data.text is string && request.resource.data.text.size() > 0
+            && request.resource.data.createdAt == request.time
+            && request.resource.data.keys().hasOnly(['uid', 'displayName', 'text', 'createdAt']);
+        }
+
+        // Reading needs no account — same as the recipe itself, just
+        // visible to whoever can see the recipe it's attached to.
+        allow get, list: if recipeVisibleById(recipeId);
+        allow create: if recipeVisibleById(recipeId) && validMessage();
+        // No editing or deleting a comment — the current UI never offers
+        // either.
+        allow update, delete: if false;
+
+        match /replies/{replyId} {
+          allow get, list: if recipeVisibleById(recipeId);
+          allow create: if recipeVisibleById(recipeId) && validMessage();
+          allow update, delete: if false;
+        }
+      }
+    }
+
+    // Phase 2 of the migration: submissions and publishing. A submission
+    // moves pending -> needs_revision -> pending (resubmitted) or
+    // pending/needs_revision -> rejected -> (discarded by its owner).
+    // Nothing is ever deleted by an editor decision — only the owner
+    // discards their own needs_revision/rejected submission, or an
+    // editor's publish removes it as the other half of the transaction
+    // above.
+    match /submissions/{submissionId} {
+      function isOwner() {
+        return request.auth != null && resource.data.ownerUid == request.auth.uid;
+      }
+
+      // A reader creating their own submission. Exactly these fields, no
+      // smuggled moderation state (reason/note/decidedBy/decidedAt must
+      // start blank — only an editor's later update can set them) and no
+      // pre-approved status.
+      function ownerCreate() {
+        return request.auth != null
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.ownerEmail == request.auth.token.email
+          && request.resource.data.status == 'pending'
+          && request.resource.data.title is string && request.resource.data.title.size() > 0
+          && request.resource.data.access in ['public', 'circle', 'owner']
+          && request.resource.data.steps is list && request.resource.data.steps.size() > 0
+          && request.resource.data.ingredients is list
+          && request.resource.data.reason == ''
+          && request.resource.data.note == ''
+          && request.resource.data.decidedBy == ''
+          && request.resource.data.decidedAt == null
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.keys().hasOnly([
+            'ownerUid', 'ownerEmail', 'submitter', 'status', 'title', 'author', 'nationality',
+            'meal', 'tastes', 'time', 'difficulty', 'portions', 'source', 'notes',
+            'access', 'ingredients', 'steps', 'photos', 'summary', 'flag', 'reason', 'note',
+            'decidedBy', 'decidedAt', 'createdAt', 'updatedAt',
+          ]);
+      }
+
+      // The owner editing and resubmitting their own needs_revision
+      // submission. Only the status transition and the recipe content
+      // move — identity fields cannot.
+      function ownerResubmit() {
+        return isOwner()
+          && resource.data.status == 'needs_revision'
+          && request.resource.data.status == 'pending'
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.ownerEmail == resource.data.ownerEmail
+          && request.resource.data.updatedAt == request.time;
+      }
+
+      // An editor sending a submission back for revision or rejecting it
+      // outright, from either the pending or the needs_revision pile.
+      // Ownership can never move under an editor's write, and a reason
+      // is always required (mirrors the queue UI, which always sends one).
+      function editorDecision() {
+        return isEditor()
+          && resource.data.status in ['pending', 'needs_revision']
+          && request.resource.data.status in ['needs_revision', 'rejected']
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.ownerEmail == resource.data.ownerEmail
+          && request.resource.data.reason is string && request.resource.data.reason.size() > 0
+          && request.resource.data.decidedAt == request.time;
+      }
+
+      // An editor's small content-only correction ("Amend before
+      // approving" / "Save, keep in the queue") — the status doesn't move.
+      function editorAmend() {
+        return isEditor()
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.ownerEmail == resource.data.ownerEmail;
+      }
+
+      // List-query provability, same trick as recipes/{recipeId} above: a
+      // reader's own-submissions query (where('ownerUid','==',uid)) lines
+      // up with the first disjunct for every document it could match; an
+      // editor's moderation-queue query (where('status','in',[...]))
+      // is proven safe by isEditor(), which doesn't depend on
+      // resource.data at all.
+      allow get, list: if
+        (request.auth != null && resource.data.ownerUid == request.auth.uid)
+        || isEditor();
+
+      allow create: if ownerCreate();
+      allow update: if ownerResubmit() || editorDecision() || editorAmend();
+      // The owner may discard their own needs_revision/rejected
+      // submission. An editor's delete only ever happens as half of the
+      // publish transaction (paired with the recipes/ create above) —
+      // rules check each half independently, so a non-editor attempting
+      // that same transaction still has its recipes/create half rejected.
+      allow delete: if (isOwner() && resource.data.status in ['needs_revision', 'rejected']) || isEditor();
+    }
+
+    // Phase 4: recipe reports/takedown requests. A top-level collection
+    // (like submissions/) rather than nested under the recipe, so an
+    // editor's queue is one query across every recipe. Nothing is ever
+    // hard-deleted — dismissing or resolving is a status change, so the
+    // moderation history survives even though the editor's own queue
+    // (where('status','==','open')) only ever shows the open ones,
+    // matching the mock's exact "it just disappears" behaviour.
+    match /reports/{reportId} {
+      // The app only ever calls this for a signed-in reporter today —
+      // that's a product choice (see RecipePage.tsx's sign-in gate), not
+      // something this rule forces. reporterUid/reporterName are stored
+      // as nullable so a future anonymous-reporting path wouldn't need a
+      // schema change, but this rule only ever grants create to an
+      // authenticated caller reporting as themselves.
+      function ownerCreate() {
+        return request.auth != null
+          && request.resource.data.reporterUid == request.auth.uid
+          && request.resource.data.reporterName is string && request.resource.data.reporterName.size() > 0
+          && request.resource.data.status == 'open'
+          && request.resource.data.recipeId is string && request.resource.data.recipeId.size() > 0
+          && request.resource.data.recipeTitle is string
+          && request.resource.data.kind is string && request.resource.data.kind.size() > 0
+          && request.resource.data.reason is string && request.resource.data.reason.size() > 0
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.closedAt == null
+          && request.resource.data.closedBy == ''
+          && request.resource.data.keys().hasOnly([
+            'recipeId', 'recipeTitle', 'reporterUid', 'reporterName', 'kind', 'reason',
+            'status', 'createdAt', 'closedAt', 'closedBy',
+          ]);
+      }
+
+      // An editor dismissing a report or resolving it (by fixing or
+      // removing the recipe) — either way it's a status change, never a
+      // rewrite of what was reported or who reported it.
+      function editorClose() {
+        return isEditor()
+          && resource.data.status == 'open'
+          && request.resource.data.status in ['dismissed', 'resolved']
+          && request.resource.data.closedAt == request.time
+          && request.resource.data.closedBy is string && request.resource.data.closedBy.size() > 0
+          && request.resource.data.recipeId == resource.data.recipeId
+          && request.resource.data.recipeTitle == resource.data.recipeTitle
+          && request.resource.data.reporterUid == resource.data.reporterUid
+          && request.resource.data.reporterName == resource.data.reporterName
+          && request.resource.data.kind == resource.data.kind
+          && request.resource.data.reason == resource.data.reason;
+      }
+
+      // Readers never read this collection at all — there's no "my
+      // reports" page, so unlike submissions/asks there's no owner
+      // disjunct here to prove a query safe against; only an editor's
+      // queue query (where('status','==','open')) or a direct get ever
+      // needs to succeed.
+      allow get, list: if isEditor();
+      allow create: if ownerCreate();
+      allow update: if editorClose();
+      allow delete: if false;
+    }
+
+    // Phase 4: questions and suggestions ("asks"). Same three-way
+    // visibility split as recipes (Phase 1): a reader's own asks, the
+    // published-for-everyone ones (readable with no account, same as
+    // recipes/comments), and an editor's unconstrained queue.
+    match /asks/{askId} {
+      function isAskOwner() { return request.auth != null && resource.data.uid == request.auth.uid; }
+      function isPublicAsk() { return resource.data.status == 'Answered' && resource.data.published == true; }
+
+      function ownerCreateAsk() {
+        return request.auth != null
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.status == 'Waiting'
+          && request.resource.data.by is string && request.resource.data.by.size() > 0
+          && request.resource.data.kind is string && request.resource.data.kind.size() > 0
+          && request.resource.data.subject is string
+          && request.resource.data.text is string && request.resource.data.text.size() > 0
+          && request.resource.data.reply == ''
+          && request.resource.data.repliedBy == ''
+          && request.resource.data.published == false
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.repliedAt == null
+          && request.resource.data.keys().hasOnly([
+            'uid', 'by', 'kind', 'subject', 'text', 'status', 'reply', 'repliedBy', 'published',
+            'createdAt', 'repliedAt',
+          ]);
+      }
+
+      // Covers all three editor actions (reply, publish/unpublish toggle,
+      // close) — none of them can move who asked, what they asked, or
+      // when it was first sent.
+      function editorUpdateAsk() {
+        return isEditor()
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.by == resource.data.by
+          && request.resource.data.kind == resource.data.kind
+          && request.resource.data.subject == resource.data.subject
+          && request.resource.data.text == resource.data.text
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.status in ['Waiting', 'Answered', 'Closed']
+          && request.resource.data.published is bool
+          && request.resource.data.repliedBy is string
+          && request.resource.data.reply is string;
+      }
+
+      // List-query provability, same trick as recipes/submissions: a
+      // reader's own-asks query (where('uid','==',uid)) lines up with
+      // the owner disjunct; the public FAQ query
+      // (where('status','==','Answered').where('published','==',true))
+      // lines up with isPublicAsk(); an editor's unconstrained queue
+      // query is proven by isEditor(), which depends on neither field.
+      allow get, list: if isAskOwner() || isPublicAsk() || isEditor();
+      allow create: if ownerCreateAsk();
+      allow update: if editorUpdateAsk();
+      allow delete: if false;
+    }
+
+    // Everything else (pantry) is still mocked client-side and not yet
+    // backed by Firestore.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
