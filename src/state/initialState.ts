@@ -1,5 +1,4 @@
 import type { AppState, FormState } from '../types';
-import { INITIAL_ACCOUNTS } from '../data/accounts';
 import { INITIAL_PANTRY } from '../data/content';
 
 export function freshForm(submitter = ''): FormState {
@@ -17,7 +16,10 @@ export function initialAppState(): AppState {
     page: 'home', recipeId: 'bacalhau',
     signedIn: false, role: 'reader', currentUser: null, authLoading: true,
     pendingPage: '', signRole: 'reader', signMode: 'in',
-    accounts: INITIAL_ACCOUNTS,
+    // The Admin page's real, Firestore-backed editor list — see
+    // src/lib/usersRepo.ts's queryEditors and the auth-driven refresh in
+    // AppStateContext.tsx.
+    editors: [],
     signName: '', signEmail: '', signPass: '', signError: '',
     editorDraft: '', editorError: '',
     // Recipes now come from Firestore — see src/lib/recipesRepo.ts and the

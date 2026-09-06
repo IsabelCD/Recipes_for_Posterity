@@ -12,7 +12,7 @@ import {
   assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
-  collection, doc, getDoc, getDocs, query, setDoc, where,
+  collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where,
 } from 'firebase/firestore';
 import { RECIPES } from '../src/data/recipes';
 import { toFirestoreRecipeData } from '../src/lib/firestoreRecipes';
@@ -176,6 +176,43 @@ describe('firestore.rules — /recipes/{recipeId} (Phase 1: read-only)', () => {
     await seedEditorProfile(EDITOR_UID, EDITOR_EMAIL);
     const db = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
     await assertFails(setDoc(doc(db, 'recipes', 'new1'), publicRecipe('new1')));
+  });
+
+  test('editor can amend a published recipe\'s content', async () => {
+    await seedEditorProfile(EDITOR_UID, EDITOR_EMAIL);
+    await seedRecipe('pub1', publicRecipe('pub1'));
+    const db = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    await assertSucceeds(updateDoc(doc(db, 'recipes', 'pub1'), {
+      title: 'Corrected title',
+      ingredients: [{ q: 1, u: 'tsp', n: 'salt' }],
+      steps: [{ text: 'Boil the potatoes.', uses: [] }],
+      editedOn: '2026-09-07', editedBy: 'Editor Whitcombe',
+    }));
+    const snap = await getDoc(doc(db, 'recipes', 'pub1'));
+    expect(snap.data()?.title).toBe('Corrected title');
+    expect(snap.data()?.editedBy).toBe('Editor Whitcombe');
+  });
+
+  test('a content amend cannot leave the recipe with no steps', async () => {
+    await seedEditorProfile(EDITOR_UID, EDITOR_EMAIL);
+    await seedRecipe('pub1', { ...publicRecipe('pub1'), steps: [{ text: 'Boil the potatoes.', uses: [] }] });
+    const db = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    await assertFails(updateDoc(doc(db, 'recipes', 'pub1'), { steps: [] }));
+  });
+
+  test('a content amend cannot reassign ownership, visibility, or the rating aggregate', async () => {
+    await seedEditorProfile(EDITOR_UID, EDITOR_EMAIL);
+    await seedRecipe('pub1', publicRecipe('pub1'));
+    const db = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    await assertFails(updateDoc(doc(db, 'recipes', 'pub1'), { title: 'x', ownerUid: EDITOR_UID }));
+    await assertFails(updateDoc(doc(db, 'recipes', 'pub1'), { title: 'x', circleEmails: [EDITOR_EMAIL] }));
+    await assertFails(updateDoc(doc(db, 'recipes', 'pub1'), { title: 'x', rating: 5, votes: 1 }));
+  });
+
+  test('a reader cannot amend a published recipe\'s content', async () => {
+    await seedRecipe('pub1', publicRecipe('pub1'));
+    const db = testEnv.authenticatedContext(ALICE_UID, { email: ALICE_EMAIL }).firestore();
+    await assertFails(updateDoc(doc(db, 'recipes', 'pub1'), { title: 'Hijacked' }));
   });
 
   test('the mapped seed recipes serialize to Firestore in the new step/uses representation', async () => {

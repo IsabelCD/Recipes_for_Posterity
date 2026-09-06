@@ -118,12 +118,14 @@ export interface Submission extends PendingSubmission {
   decidedOn?: string;
 }
 
-export interface Account {
+// A real users/{uid} account, as looked up or listed by an editor
+// managing roles — see src/lib/usersRepo.ts's findUserByEmail/queryEditors.
+export interface EditorAccount {
+  uid: string;
+  displayName: string;
   email: string;
-  name: string;
   role: Role;
-  joined: string;
-  seed?: boolean;
+  createdAt: string;
 }
 
 export interface Ask {
@@ -265,7 +267,11 @@ export interface AppState {
   pendingPage: PageKey | '';
   signRole: Role;
   signMode: 'in' | 'new';
-  accounts: Account[];
+  // The Admin page's real, Firestore-backed list of current editors — see
+  // src/lib/usersRepo.ts's queryEditors. Only ever populated for a
+  // signed-in editor; firestore.rules' users/{userId} list rule would
+  // reject the underlying query for anyone else.
+  editors: EditorAccount[];
   signName: string;
   signEmail: string;
   signPass: string;

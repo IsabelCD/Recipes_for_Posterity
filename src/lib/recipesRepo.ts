@@ -1,12 +1,12 @@
-// The one place that queries Firestore for recipes. Every caller —
-// today's auth-state listener, and any later phase that needs a refresh
-// after publishing/amending/deleting a recipe — goes through
-// `loadVisibleRecipes` so the "which query for which identity" logic
-// exists exactly once. Phase 1 only reads; nothing here writes.
-import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
+// The one place that queries (and, since the editor content-amend below,
+// writes) Firestore recipes. Every caller — the auth-state listener, and
+// any action that publishes/amends/deletes a recipe — goes through
+// `loadVisibleRecipes` for reads, so the "which query for which identity"
+// logic exists exactly once.
+import { collection, doc, getDoc, getDocs, query, updateDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
-import { toAppRecipe, type FirestoreRecipeData } from './firestoreRecipes';
-import type { Recipe, Role } from '../types';
+import { toAppRecipe, type FirestoreRecipeData, type FirestoreRecipeStep } from './firestoreRecipes';
+import type { Access, Ingredient, Recipe, Role } from '../types';
 
 const RECIPES_COLLECTION = 'recipes';
 
@@ -72,4 +72,26 @@ export async function loadVisibleRecipes(ctx: VisibilityContext): Promise<Recipe
     ctx.email ? queryCircleRecipes(ctx.email) : Promise.resolve([]),
   ]);
   return dedupeById([...pub, ...own, ...circle]);
+}
+
+// Everything an editor's "fix" (amend) form can change about an
+// already-published recipe. Deliberately excludes ownerUid/ownerEmail/
+// circleEmails/access-driven visibility bookkeeping, rating/votes/
+// ratingSum, date, blurb and comments — none of those are fields the
+// amend form even shows, and firestore.rules' isEditorContentAmend()
+// independently enforces the same boundary (only these fields may move).
+export interface RecipeAmendment {
+  title: string; author: string; submitter: string; nationality: string; meal: string;
+  tastes: string[]; time: number; difficulty: number; portions: number; source: string;
+  notes: string; access: Access; ingredients: Ingredient[]; steps: FirestoreRecipeStep[]; photos: string[];
+  editedOn: string; editedBy: string;
+}
+
+// Editor-only (see firestore.rules). Content amend of a recipe that's
+// already live — the submission-stage equivalent of this is
+// submissionsRepo.ts's amendSubmissionContent; this is what "Amend the
+// recipe" from a report, or "Save the new version" from a recipe page,
+// actually persists now instead of only updating local state.
+export async function amendRecipe(id: string, content: RecipeAmendment): Promise<void> {
+  await updateDoc(doc(db, RECIPES_COLLECTION, id), { ...content });
 }

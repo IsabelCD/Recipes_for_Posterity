@@ -1,6 +1,6 @@
 import type { AppState, Access, Recipe, Me } from '../types';
 import { OWNERS, SEED_ACCESS } from '../data/accounts';
-import { ingKey, isBasic } from './helpers';
+import { normalizeIngredient, isBasic } from './helpers';
 
 // The real, authenticated identity — Firebase Auth's email, not a form
 // field. See src/state/AppStateContext.tsx for how currentUser is kept in
@@ -93,12 +93,16 @@ export function filtered(state: AppState): Recipe[] {
 
 export interface PantryEntry { key: string; uses: number }
 
-// Every non-basic ingredient across the archive, with how many recipes use it.
+// Every non-basic ingredient across the archive, with how many recipes use
+// it — keyed (and, since this list has no single "original" spelling once
+// several recipes' variants are merged, also displayed) by its canonical
+// normalizeIngredient() key, so "tomato"/"tomatoes"/"tomatos" become one
+// cupboard entry instead of three.
 export function pantryCatalogue(state: AppState): PantryEntry[] {
   const counts: Record<string, number> = {};
   visibleRecipes(state).forEach((r) => r.ingredients.forEach((i) => {
     if (isBasic(i.n)) return;
-    const k = ingKey(i.n);
+    const k = normalizeIngredient(i.n);
     counts[k] = (counts[k] || 0) + 1;
   }));
   return Object.keys(counts)
@@ -114,7 +118,7 @@ export function matchRecipe(state: AppState, r: Recipe): RecipeMatch {
   const missing: string[] = [];
   r.ingredients.forEach((i) => {
     if (isBasic(i.n)) return;
-    const k = ingKey(i.n);
+    const k = normalizeIngredient(i.n);
     need.push(k);
     if (have.indexOf(k) < 0) missing.push(i.n.split(',')[0].trim());
   });
@@ -133,8 +137,12 @@ export function shoppingItems(state: AppState): ShoppingItem[] {
     const factor = portionsFor(state, r) / r.portions;
     r.ingredients.forEach((i) => {
       if (isBasic(i.n)) return;
+      // Aggregated by the canonical key so "tomato" from one recipe and
+      // "tomatoes" from another add up into one row, but displayed under
+      // whichever original name was seen first — never the canonical key
+      // itself, which exists purely for matching (see normalizeIngredient).
       const name = i.n.split(',')[0].trim();
-      const key = `${name.toLowerCase()}|${i.u || ''}`;
+      const key = `${normalizeIngredient(i.n)}|${i.u || ''}`;
       if (!map[key]) map[key] = { key, name, unit: i.u || '', total: 0, recipes: [] };
       // q.b. — as much as you like — never scales and never gets a total.
       if (i.qb) map[key].qb = true;

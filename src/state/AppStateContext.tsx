@@ -5,7 +5,7 @@ import {
 } from 'firebase/auth';
 import { Timestamp, doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
-import { loadVisibleRecipes, type VisibilityContext } from '../lib/recipesRepo';
+import { amendRecipe, loadVisibleRecipes, type VisibilityContext } from '../lib/recipesRepo';
 import {
   amendSubmissionContent, contentFromFormFields, createSubmission, discardSubmission,
   publishSubmission as publishSubmissionOp, queryModerationQueue, queryMySubmissions,
@@ -19,7 +19,7 @@ import {
 import {
   closeAsk, createAsk, queryAllAsksForEditor, queryMyAsks, queryPublicAsks, replyToAsk, setAskPublished,
 } from '../lib/asksRepo';
-import { setMyCircleEmails } from '../lib/usersRepo';
+import { findUserByEmail, queryEditors, setMyCircleEmails, setUserRole } from '../lib/usersRepo';
 import type { AppState, Access, CurrentUser, PageKey, PendingSubmission, RejectedSubmission, Recipe, FormState, Role } from '../types';
 import { initialAppState, freshForm } from './initialState';
 import { REJECT_REASONS } from '../data/reasons';
@@ -132,7 +132,7 @@ export interface AppActions {
   signOut(): void;
   setEditorDraft(v: string): void;
   addEditor(): void;
-  demoteEditor(email: string): void;
+  demoteEditor(uid: string): void;
 
   // ── search ──
   setFilter<K extends keyof AppState['f']>(key: K, value: AppState['f'][K]): void;
@@ -319,6 +319,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       .catch((e) => console.error('[reports] failed to load', e));
   }, []);
 
+  // Editor-only: every real account currently holding the editor role,
+  // for the Admin page's "Editors" list — see src/lib/usersRepo.ts.
+  const applyEditorsFor = useCallback((ctx: VisibilityContext) => {
+    if (!ctx.signedIn || ctx.role !== 'editor') { setState((s) => ({ ...s, editors: [] })); return; }
+    queryEditors()
+      .then((editors) => setState((s) => ({ ...s, editors })))
+      .catch((e) => console.error('[users] failed to load editors', e));
+  }, []);
+
   // Same three-way split as recipes (Phase 1): everyone gets the
   // published-for-everyone asks, a signed-in reader additionally gets
   // their own, and an editor gets the full unconstrained queue instead
@@ -480,6 +489,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       const s = stateRef.current;
       applyAsksFor({ signedIn: s.signedIn, role: s.role, uid: s.currentUser?.uid ?? null, email: s.currentUser?.email ?? null });
     };
+    const refreshEditorsNow = () => {
+      const s = stateRef.current;
+      applyEditorsFor({ signedIn: s.signedIn, role: s.role, uid: s.currentUser?.uid ?? null, email: s.currentUser?.email ?? null });
+    };
 
     // Editor-only. Creates the real recipes/{id} doc and removes the
     // submission in one transaction (src/lib/submissionsRepo.ts), then
@@ -560,23 +573,41 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       const amendStepsErr = stepsAndAmountsError(form);
       if (amendStepsErr) { setState((s2) => ({ ...s2, formStep: 2, formError: amendStepsErr })); return; }
       if (t.kind === 'recipe') {
-        // The recipe content edit itself stays local-only — amending an
-        // already-published recipe isn't persisted yet, unchanged since
-        // Phase 2. Only the report this fix was for is real, so only its
-        // resolution is a Firestore write.
+        // An editor's content "fix" for an already-published recipe — a
+        // real Firestore write now (see src/lib/recipesRepo.ts's
+        // amendRecipe). The report this fix was for, if any, is resolved
+        // separately once the amend itself has actually succeeded — not
+        // one transaction, matching how every other report resolution in
+        // this app is just paired with its own real write, not atomic
+        // with it.
         const reportId = t.reportId;
+        const editedBy = me(s).name || 'An editor';
+        const content = {
+          title: v.title, author: v.author, submitter: v.submitter, nationality: v.nationality, meal: v.meal,
+          tastes: v.tastes, time: v.time, difficulty: v.difficulty, portions: v.portions, source: v.source,
+          notes: v.notes, access: v.access, ingredients: v.ingredients,
+          steps: stepsToFirestore(v.steps, v.uses, v.stepPhotos),
+          photos: v.photos, editedOn: TODAY, editedBy,
+        };
         setState((s2) => ({
           ...s2,
-          recipes: s2.recipes.map((r) => (r.id === t.id ? { ...r, ...v, blurb: r.blurb, editedOn: TODAY, editedBy: 'You' } : r)),
-          takedowns: reportId ? s2.takedowns.filter((x) => x.id !== reportId) : s2.takedowns,
           editTarget: null, formStep: 1, formError: '', page: 'recipe', recipeId: t.id,
         }));
-        flash(`New version of “${v.title}” saved.${reportId ? ' The reader who reported it has been told.' : ''}`);
         window.scrollTo(0, 0);
-        if (reportId) {
-          const closedBy = me(s).name || 'An editor';
-          resolveReport(reportId, closedBy).catch((e) => { console.error('[reports] resolve failed', e); refreshReportsNow(); });
-        }
+        (async () => {
+          try {
+            await amendRecipe(t.id, content);
+            flash(`New version of “${v.title}” saved.${reportId ? ' The reader who reported it has been told.' : ''}`);
+            refreshRecipesNow();
+            if (reportId) {
+              setState((s2) => ({ ...s2, takedowns: s2.takedowns.filter((x) => x.id !== reportId) }));
+              resolveReport(reportId, editedBy).catch((e) => { console.error('[reports] resolve failed', e); refreshReportsNow(); });
+            }
+          } catch (e) {
+            console.error('[recipes] amend failed', e);
+            flash('Could not save your changes. Please try again.');
+          }
+        })();
         return;
       }
       // t.kind === 'pending' — an editor amending someone else's queued
@@ -739,26 +770,39 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         pendingIntentRef.current = { type: 'signout' };
         firebaseSignOut(auth).catch(() => { pendingIntentRef.current = null; });
       },
-      // addEditor/demoteEditor still operate on the mocked `accounts` list
-      // (src/data/accounts.ts) — a demo backdrop for the Admin page, not
-      // real authorization. They cannot grant or revoke anyone's actual
-      // editor role, which lives only in their own users/{uid} Firestore
-      // doc. Wiring this to Firestore is a separate, later step.
+      // addEditor/demoteEditor look up and change a real users/{uid}
+      // Firestore doc — see src/lib/usersRepo.ts. firestore.rules'
+      // isEditorRoleChange() independently re-checks that the caller is
+      // an editor and that only the role field moves, so this client code
+      // is a convenience, not the actual security boundary.
       setEditorDraft: (v) => setState((s) => ({ ...s, editorDraft: v, editorError: '' })),
       addEditor: () => {
         const s = stateRef.current;
         const v = (s.editorDraft || '').trim().toLowerCase();
         if (!v) { setState((s2) => ({ ...s2, editorError: 'Write the email address of the account first.' })); return; }
-        const found = s.accounts.find((a) => a.email.toLowerCase() === v);
-        if (!found) { setState((s2) => ({ ...s2, editorError: `No account here uses ${v}. They have to sign up before they can be made an editor.` })); return; }
-        if (found.role === 'editor') { setState((s2) => ({ ...s2, editorError: `${found.name} is already an editor.` })); return; }
-        setState((s2) => ({ ...s2, accounts: s2.accounts.map((x) => (x.email === found.email ? { ...x, role: 'editor' } : x)), editorDraft: '', editorError: '' }));
-        flash(`${found.name} is now an editor.`);
+        (async () => {
+          try {
+            const found = await findUserByEmail(v);
+            if (!found) { setState((s2) => ({ ...s2, editorError: `No account here uses ${v}. They have to sign up before they can be made an editor.` })); return; }
+            if (found.role === 'editor') { setState((s2) => ({ ...s2, editorError: `${found.displayName || v} is already an editor.` })); return; }
+            if (found.uid === s.currentUser?.uid) { setState((s2) => ({ ...s2, editorError: 'You cannot change your own role here.' })); return; }
+            await setUserRole(found.uid, 'editor');
+            setState((s2) => ({ ...s2, editorDraft: '', editorError: '' }));
+            flash(`${found.displayName || v} is now an editor.`);
+            refreshEditorsNow();
+          } catch (e) {
+            console.error('[users] promote failed', e);
+            setState((s2) => ({ ...s2, editorError: 'Could not update that account. Please try again.' }));
+          }
+        })();
       },
-      demoteEditor: (email) => {
-        const acc = stateRef.current.accounts.find((a) => a.email === email);
-        setState((s) => ({ ...s, accounts: s.accounts.map((x) => (x.email === email ? { ...x, role: 'reader' } : x)) }));
-        if (acc) flash(`${acc.name} is a reader again.`);
+      demoteEditor: (uid) => {
+        const s = stateRef.current;
+        const acc = s.editors.find((x) => x.uid === uid);
+        if (!acc) return;
+        setUserRole(uid, 'reader')
+          .then(() => { flash(`${acc.displayName} is a reader again.`); refreshEditorsNow(); })
+          .catch((e) => { console.error('[users] demote failed', e); flash('Could not update that account. Please try again.'); });
       },
 
       setFilter,
@@ -1110,7 +1154,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           .catch((e) => { console.error('[asks] close failed', e); flash('Could not close that. Please try again.'); });
       },
     };
-  }, [flash, applyRecipesFor, applySubmissionsFor, applyReportsFor, applyAsksFor]);
+  }, [flash, applyRecipesFor, applySubmissionsFor, applyReportsFor, applyAsksFor, applyEditorsFor]);
 
   // The single source of truth for signed-in state. Fires on explicit
   // sign-in/sign-up/sign-out AND on a silent session restore when the
@@ -1127,6 +1171,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         applySubmissionsFor({ signedIn: false, role: 'reader', uid: null, email: null });
         applyReportsFor({ signedIn: false, role: 'reader', uid: null, email: null });
         applyAsksFor({ signedIn: false, role: 'reader', uid: null, email: null });
+        applyEditorsFor({ signedIn: false, role: 'reader', uid: null, email: null });
         if (intent?.type === 'signout') {
           setState((s) => ({
             ...s, page: 'home', signPass: '', pendingPage: '', signName: '', signEmail: '', myRatings: {},
@@ -1168,6 +1213,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           applySubmissionsFor({ signedIn: true, role: cu.role, uid: cu.uid, email: cu.email });
           applyReportsFor({ signedIn: true, role: cu.role, uid: cu.uid, email: cu.email });
           applyAsksFor({ signedIn: true, role: cu.role, uid: cu.uid, email: cu.email });
+          applyEditorsFor({ signedIn: true, role: cu.role, uid: cu.uid, email: cu.email });
           if (intent?.type === 'signup') {
             setState((s) => ({ ...s, pendingPage: '', page: intent.pendingPage || 'me' }));
             actions.flash(`Account created. You are signed in as ${cu.displayName}.`);
@@ -1193,7 +1239,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       });
     });
     return unsubscribe;
-  }, [actions, applyRecipesFor, applySubmissionsFor, applyReportsFor, applyAsksFor]);
+  }, [actions, applyRecipesFor, applySubmissionsFor, applyReportsFor, applyAsksFor, applyEditorsFor]);
 
   const value = useMemo(() => ({ state, actions }), [state, actions]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

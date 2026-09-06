@@ -184,20 +184,20 @@ export function AdminPage() {
       <div style={{ padding: '52px 0 0' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 22, alignItems: 'baseline', paddingBottom: 10, borderBottom: '1px solid var(--color-text)' }}>
           <h2 style={{ margin: 0, fontSize: 26 }}>Editors</h2>
-          <span className="tag tag-neutral">{state.accounts.filter((a) => a.role === 'editor').length === 1 ? '1 editor' : `${state.accounts.filter((a) => a.role === 'editor').length} editors`}</span>
+          <span className="tag tag-neutral">{state.editors.length === 1 ? '1 editor' : `${state.editors.length} editors`}</span>
           <span style={{ fontSize: 14 }} className="text-muted">Editors can publish, send submissions back and answer questions. Give the role only to people who read submissions.</span>
         </div>
-        {state.accounts.filter((a) => a.role === 'editor').sort((a, b) => a.name.localeCompare(b.name)).map((ac) => {
-          const self = ac.email === (state.signEmail || '').trim().toLowerCase();
+        {state.editors.slice().sort((a, b) => a.displayName.localeCompare(b.displayName)).map((ac) => {
+          const self = ac.uid === state.currentUser?.uid;
           return (
-            <div key={ac.email} className="account-row">
+            <div key={ac.uid} className="account-row">
               <div>
-                <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 18, lineHeight: 1.2 }}>{ac.name}</div>
-                <div style={{ fontSize: 14 }} className="text-muted">{ac.email} · joined {dateLabel(ac.joined)}</div>
+                <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 18, lineHeight: 1.2 }}>{ac.displayName}</div>
+                <div style={{ fontSize: 14 }} className="text-muted">{ac.email}{ac.createdAt ? ` · joined ${dateLabel(ac.createdAt)}` : ''}</div>
               </div>
               <div><span className="tag tag-accent-2">Editor</span></div>
               <div>
-                {!self && <button className="btn btn-secondary" onClick={() => actions.demoteEditor(ac.email)} style={{ width: '100%', justifyContent: 'center' }}>Return to reader</button>}
+                {!self && <button className="btn btn-secondary" onClick={() => actions.demoteEditor(ac.uid)} style={{ width: '100%', justifyContent: 'center' }}>Return to reader</button>}
                 {self && <span style={{ fontSize: 14 }} className="text-muted">This is your own account.</span>}
               </div>
             </div>

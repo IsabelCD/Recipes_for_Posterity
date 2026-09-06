@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "emulators": "firebase emulators:start",
+    "test:unit": "vitest run tests/ingredientNormalization.test.ts",
     "test:rules": "firebase emulators:exec --only firestore \"vitest run tests\"",
     "seed:emulator": "cross-env FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 tsx scripts/seedFirestoreRecipes.ts"
   },

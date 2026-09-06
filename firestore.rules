@@ -27,12 +27,30 @@ service cloud.firestore {
         && (l.size() < 10 || isValidEmail(l[9]));
     }
 
+    // `role` lives on users/{uid} (never on the request), so "is this
+    // requester an editor" needs one extra read — this does NOT depend on
+    // which document is being checked, which matters for why a `list`
+    // rule elsewhere can validate an editor's unconstrained query (see
+    // the per-branch comments under recipes/{recipeId}'s `allow get,
+    // list`, and users/{userId}'s own `allow list` just below).
+    function isEditor() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'editor';
+    }
+
     // Public user profiles. `role` is the single source of truth for
     // authorization (see src/state/AppStateContext.tsx) — this rule is
     // what actually stops anyone from self-assigning "editor", regardless
     // of what the client sends.
     match /users/{userId} {
       allow get: if request.auth != null && request.auth.uid == userId;
+
+      // Phase 7: an editor managing accounts needs to find a user by
+      // email and list who currently holds the editor role — isEditor()
+      // doesn't depend on resource.data at all, so it proves any query
+      // shape safe, the same trick recipes/submissions/asks already use
+      // for an editor's own unconstrained queue query.
+      allow list: if isEditor();
 
       allow create: if request.auth != null
         && request.auth.uid == userId
@@ -60,27 +78,36 @@ service cloud.firestore {
       // never move through this path — self-promotion to editor, or
       // rewriting the account's identity, has to stay impossible no matter
       // what the client sends. See src/lib/usersRepo.ts.
-      allow update: if request.auth != null
-        && request.auth.uid == userId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'circleEmails'])
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.email == resource.data.email
-        && request.resource.data.createdAt == resource.data.createdAt
-        && request.resource.data.displayName is string && request.resource.data.displayName.size() > 0
-        && isValidEmailList(request.resource.data.circleEmails);
+      function isOwnProfileUpdate() {
+        return request.auth != null
+          && request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'circleEmails'])
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.displayName is string && request.resource.data.displayName.size() > 0
+          && isValidEmailList(request.resource.data.circleEmails);
+      }
+
+      // Phase 7: an editor promoting or demoting a DIFFERENT account.
+      // Deliberately excludes the caller's own document (an editor giving
+      // up their own role, or reinforcing it, should not go through this
+      // path) — everything except `role` stays exactly as it was, and
+      // `role` can only ever become one of the two real values.
+      function isEditorRoleChange() {
+        return isEditor()
+          && request.auth.uid != userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+          && request.resource.data.role in ['reader', 'editor']
+          && request.resource.data.displayName == resource.data.displayName
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.circleEmails == resource.data.circleEmails;
+      }
+
+      allow update: if isOwnProfileUpdate() || isEditorRoleChange();
 
       allow delete: if false;
-    }
-
-    // Phase 1 of the recipe-persistence migration: read-only recipes.
-    // `role` lives on users/{uid} (never on the request), so "is this
-    // requester an editor" needs one extra read — this does NOT depend on
-    // which recipe is being checked, which matters for why the `list`
-    // rule below can validate an editor's unconstrained query (see the
-    // three per-branch comments under `allow get, list`).
-    function isEditor() {
-      return request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'editor';
     }
 
     // Same public/own/circle/editor visibility test Phase 1 wrote inline
@@ -176,11 +203,30 @@ service cloud.firestore {
           && isValidEmailList(request.resource.data.circleEmails);
       }
 
-      // Amending an already-published recipe's other content isn't
-      // persisted yet (the editor's "fix" flow still only edits local
-      // state) — only the rating aggregate and the owner's circle sync
-      // above can move via update.
-      allow update: if isAggregateUpdate() || isCircleSync();
+      // An editor's content "fix" for an already-published recipe (see
+      // src/lib/recipesRepo.ts's amendRecipe) — the same light shape
+      // checks the recipes/create rule above uses, plus a field allow-list
+      // that keeps ownership, visibility bookkeeping and the rating
+      // aggregate completely out of this path's reach: an editor amending
+      // content can never reassign a recipe, change who can see it via
+      // circleEmails, or move rating/votes/ratingSum/date/blurb/comments.
+      function isEditorContentAmend() {
+        return isEditor()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title', 'author', 'submitter', 'nationality', 'meal', 'tastes', 'time', 'difficulty',
+            'portions', 'source', 'notes', 'access', 'ingredients', 'steps', 'photos',
+            'editedOn', 'editedBy',
+          ])
+          && request.resource.data.title is string && request.resource.data.title.size() > 0
+          && request.resource.data.access in ['public', 'circle', 'owner']
+          && request.resource.data.steps is list && request.resource.data.steps.size() > 0
+          && request.resource.data.ingredients is list;
+      }
+
+      // Amending an already-published recipe's other content is now real
+      // (Phase 8) — previously only the rating aggregate and the owner's
+      // circle sync above could move via update.
+      allow update: if isAggregateUpdate() || isCircleSync() || isEditorContentAmend();
       // Phase 4: editors can remove a reported recipe, paired with
       // resolving the report that asked for it (see the reports/
       // collection below and src/lib/reportsRepo.ts's

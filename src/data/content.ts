@@ -74,8 +74,12 @@ export const ADMIN_RULES = [
 ];
 
 // Non-basic ingredients the cupboard starts out ticked with.
+// These have to already be in normalizeIngredient() canonical-key form
+// (src/state/helpers.ts) — state.pantry stores keys, not display text, so
+// an entry here has to spell an ingredient exactly the way normalizing a
+// recipe's line for it would, e.g. 'egg' (recipes say "eggs") not 'eggs'.
 export const INITIAL_PANTRY = [
-  'eggs', 'onion', 'garlic', 'olive oil', 'potatoes', 'tomatoes', 'lemon', 'caster sugar',
+  'egg', 'onion', 'garlic', 'olive oil', 'potato', 'tomato', 'lemon', 'caster sugar',
   'ground almonds', 'ground cinnamon', 'cucumber', 'red onion', 'red wine vinegar', 'basil leaves',
   'icing sugar', 'stale sourdough',
 ];

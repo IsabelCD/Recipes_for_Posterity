@@ -1,4 +1,5 @@
 import type { Access, Recipe } from '../types';
+import { INGREDIENT_ALIASES } from '../data/ingredientAliases';
 
 export function stars(n: number): string {
   const k = Math.round(n);
@@ -39,9 +40,23 @@ export function host(u: string): string {
   }
 }
 
-// The head word of an ingredient line: "onion, sliced thin" → "onion".
-export function ingKey(name: string): string {
-  return name.split(',')[0].trim().toLowerCase();
+// The canonical key for an ingredient line — used exclusively for
+// matching/aggregation (cupboard ticking, recipe-match, shopping-list
+// totals). Never used as the display name: callers keep showing
+// whatever the recipe/pantry actually says (see src/state/selectors.ts).
+//
+// Two steps only: (1) take the head phrase before the first comma,
+// lowercase it and collapse whitespace — "Tomatoes, chopped" →
+// "tomatoes"; (2) look the whole phrase up in INGREDIENT_ALIASES. A
+// phrase not in that list is returned exactly as cleaned — there is no
+// generic singularization step, so an uncountable word that happens to
+// end in "s" ("hummus", "couscous", "asparagus") is never corrupted, and
+// a multi-word distinction ("tomato paste" vs "tomato sauce" vs "cherry
+// tomato") can never collapse onto a shorter word by accident, since the
+// lookup is always on the entire phrase.
+export function normalizeIngredient(name: string): string {
+  const cleaned = name.split(',')[0].trim().toLowerCase().replace(/\s+/g, ' ');
+  return INGREDIENT_ALIASES[cleaned] || cleaned;
 }
 
 // Basics are assumed to be in every kitchen and never counted as missing.

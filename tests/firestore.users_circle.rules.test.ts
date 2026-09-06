@@ -10,11 +10,13 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, beforeAll, describe, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
 import {
   assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import {
+  collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where,
+} from 'firebase/firestore';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ID = 'demo-recipes-for-posterity-users-circle';
@@ -26,6 +28,8 @@ const ALICE_UID = 'alice-uid';
 const ALICE_EMAIL = 'alice@example.com';
 const BOB_UID = 'bob-uid';
 const BOB_EMAIL = 'bob@example.com';
+const EDITOR_UID = 'editor-uid';
+const EDITOR_EMAIL = 'editor@example.com';
 
 function profileDoc(overrides: Record<string, unknown> = {}) {
   return {
@@ -182,5 +186,69 @@ describe('firestore.rules — circle changes and recipe visibility (Phase 5)', (
     await seedRecipe('r1', circleRecipe('r1', ALICE_UID, ALICE_EMAIL, []));
     const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: ALICE_EMAIL }).firestore();
     await assertFails(updateDoc(doc(aliceDb, 'recipes', 'r1'), { circleEmails: ['not-an-email'] }));
+  });
+});
+
+describe('firestore.rules — editor account management (Phase 7)', () => {
+  test('an editor can find an account by email; a reader cannot', async () => {
+    await seedProfile(EDITOR_UID, profileDoc({ email: EDITOR_EMAIL, role: 'editor' }));
+    await seedProfile(ALICE_UID, profileDoc());
+    const editorDb = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    const q = query(collection(editorDb, 'users'), where('email', '==', ALICE_EMAIL));
+    const snap = await assertSucceeds(getDocs(q));
+    expect(snap.docs.map((d) => d.id)).toEqual([ALICE_UID]);
+
+    const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: ALICE_EMAIL }).firestore();
+    await assertFails(getDocs(query(collection(aliceDb, 'users'), where('email', '==', EDITOR_EMAIL))));
+  });
+
+  test('an editor can list every current editor', async () => {
+    await seedProfile(EDITOR_UID, profileDoc({ email: EDITOR_EMAIL, role: 'editor' }));
+    await seedProfile(ALICE_UID, profileDoc());
+    const editorDb = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    const snap = await assertSucceeds(getDocs(query(collection(editorDb, 'users'), where('role', '==', 'editor'))));
+    expect(snap.docs.map((d) => d.id)).toEqual([EDITOR_UID]);
+  });
+
+  test('an editor can promote a reader to editor', async () => {
+    await seedProfile(EDITOR_UID, profileDoc({ email: EDITOR_EMAIL, role: 'editor' }));
+    await seedProfile(ALICE_UID, profileDoc());
+    const editorDb = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    await assertSucceeds(updateDoc(doc(editorDb, 'users', ALICE_UID), { role: 'editor' }));
+  });
+
+  test('an editor can demote another editor to reader', async () => {
+    await seedProfile(EDITOR_UID, profileDoc({ email: EDITOR_EMAIL, role: 'editor' }));
+    await seedProfile(BOB_UID, profileDoc({ email: BOB_EMAIL, role: 'editor' }));
+    const editorDb = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    await assertSucceeds(updateDoc(doc(editorDb, 'users', BOB_UID), { role: 'reader' }));
+  });
+
+  test('an editor cannot change their own role through this path', async () => {
+    await seedProfile(EDITOR_UID, profileDoc({ email: EDITOR_EMAIL, role: 'editor' }));
+    const editorDb = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    await assertFails(updateDoc(doc(editorDb, 'users', EDITOR_UID), { role: 'reader' }));
+  });
+
+  test('a reader cannot change anyone\'s role', async () => {
+    await seedProfile(ALICE_UID, profileDoc());
+    await seedProfile(BOB_UID, profileDoc({ email: BOB_EMAIL }));
+    const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: ALICE_EMAIL }).firestore();
+    await assertFails(updateDoc(doc(aliceDb, 'users', BOB_UID), { role: 'editor' }));
+  });
+
+  test('an editor changing a role cannot smuggle changes to any other field', async () => {
+    await seedProfile(EDITOR_UID, profileDoc({ email: EDITOR_EMAIL, role: 'editor' }));
+    await seedProfile(ALICE_UID, profileDoc());
+    const editorDb = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    await assertFails(updateDoc(doc(editorDb, 'users', ALICE_UID), { role: 'editor', displayName: 'Renamed' }));
+    await assertFails(updateDoc(doc(editorDb, 'users', ALICE_UID), { role: 'editor', circleEmails: [EDITOR_EMAIL] }));
+  });
+
+  test('an editor cannot set a role to anything other than reader or editor', async () => {
+    await seedProfile(EDITOR_UID, profileDoc({ email: EDITOR_EMAIL, role: 'editor' }));
+    await seedProfile(ALICE_UID, profileDoc());
+    const editorDb = testEnv.authenticatedContext(EDITOR_UID, { email: EDITOR_EMAIL }).firestore();
+    await assertFails(updateDoc(doc(editorDb, 'users', ALICE_UID), { role: 'superadmin' }));
   });
 });
