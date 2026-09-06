@@ -1,5 +1,26 @@
-import { createContext, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AppState, Access, PageKey, PendingSubmission, RejectedSubmission, FormState } from '../types';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword,
+  signOut as firebaseSignOut, updateProfile,
+} from 'firebase/auth';
+import { Timestamp, doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
+import { loadVisibleRecipes, type VisibilityContext } from '../lib/recipesRepo';
+import {
+  amendSubmissionContent, contentFromFormFields, createSubmission, discardSubmission,
+  publishSubmission as publishSubmissionOp, queryModerationQueue, queryMySubmissions,
+  rejectSubmission as rejectSubmissionOp, requestRevision, resubmitSubmission, stepsToFirestore,
+} from '../lib/submissionsRepo';
+import { clearRating, loadMyRatings, rateRecipe } from '../lib/ratingsRepo';
+import { loadComments, postComment as postCommentOp, postReply as postReplyOp } from '../lib/commentsRepo';
+import {
+  createReport, dismissReport, queryOpenReports, removeReportedRecipe, resolveReport,
+} from '../lib/reportsRepo';
+import {
+  closeAsk, createAsk, queryAllAsksForEditor, queryMyAsks, queryPublicAsks, replyToAsk, setAskPublished,
+} from '../lib/asksRepo';
+import { setMyCircleEmails } from '../lib/usersRepo';
+import type { AppState, Access, CurrentUser, PageKey, PendingSubmission, RejectedSubmission, Recipe, FormState, Role } from '../types';
 import { initialAppState, freshForm } from './initialState';
 import { REJECT_REASONS } from '../data/reasons';
 import { TODAY } from '../data/taxonomy';
@@ -11,10 +32,94 @@ function needsAccount(page: PageKey): boolean {
   return page === 'me' || page === 'admin' || page === 'contribute';
 }
 
+// What the sign-in form was doing when it called Firebase, so the
+// onAuthStateChanged listener (the only place allowed to set
+// signedIn/currentUser/role) knows whether to run the one-time
+// "just signed in" side effects (navigate, flash a message) or stay quiet
+// (a silent session restore on page load looks identical to Firebase).
+type PendingAuthIntent = { type: 'signup' | 'signin'; pendingPage: PageKey | '' } | { type: 'signout' } | null;
+
+// Maps a users/{uid} Firestore doc to the app's CurrentUser shape.
+// Firestore's `role` is the only source of truth for authorization — the
+// sign-in page's reader/editor picker is cosmetic and never reaches here.
+function profileFromDoc(uid: string, data: Record<string, unknown>): CurrentUser {
+  const role: Role = data.role === 'editor' ? 'editor' : 'reader';
+  const createdAt = data.createdAt instanceof Timestamp
+    ? data.createdAt.toDate().toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+  const circleEmails = Array.isArray(data.circleEmails)
+    ? data.circleEmails.filter((e): e is string => typeof e === 'string')
+    : [];
+  return {
+    uid,
+    email: typeof data.email === 'string' ? data.email : '',
+    displayName: typeof data.displayName === 'string' ? data.displayName : '',
+    role,
+    createdAt,
+    circleEmails,
+  };
+}
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+// Reads users/{uid}. `retryOnMissing` covers the brief, expected window
+// right after registration where the auth session exists a moment before
+// our own setDoc() call has finished — it is NOT a silent role fallback:
+// if the doc still isn't there after retrying (or the read errors), this
+// reports failure rather than inventing a role.
+async function fetchUserProfile(uid: string, retryOnMissing: boolean): Promise<{ ok: true; profile: CurrentUser } | { ok: false }> {
+  const ref = doc(db, 'users', uid);
+  const attempts = retryOnMissing ? 6 : 1;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const snap = await getDoc(ref);
+      if (snap.exists()) return { ok: true, profile: profileFromDoc(uid, snap.data()) };
+    } catch {
+      return { ok: false };
+    }
+    if (attempt < attempts) await sleep(250);
+  }
+  return { ok: false };
+}
+
+function mapAuthError(e: unknown): string {
+  const code = (e as { code?: string } | null)?.code || '';
+  switch (code) {
+    case 'auth/email-already-in-use':
+      return 'There is already an account with that email. Sign in instead.';
+    case 'auth/invalid-email':
+      return 'That email address does not look complete.';
+    case 'auth/weak-password':
+      return 'The password needs at least eight characters.';
+    case 'auth/wrong-password':
+      return 'That password does not match the account.';
+    case 'auth/user-not-found':
+    case 'auth/invalid-credential':
+      return 'There is no account with that email address yet, or the password does not match. Choose “Create an account” if you have not signed up.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts — please wait a moment and try again.';
+    default:
+      return 'Something went wrong signing you in. Please try again.';
+  }
+}
+
 export interface AppActions {
   go(page: PageKey): void;
   openRecipe(id: string): void;
   flash(msg: string): void;
+  // Re-runs the visibility-query merge for whoever is currently signed
+  // in (or not) and replaces state.recipes. Called automatically on every
+  // auth change; later phases (publish/amend/delete) call this directly
+  // after their own write succeeds, instead of re-deriving the query
+  // selection at each call site — see src/lib/recipesRepo.ts.
+  refreshRecipes(): void;
+  // Same idea as refreshRecipes: re-runs the moderation-queue / own-
+  // submissions load for whoever is currently signed in. Called
+  // automatically on auth change; also called directly after any action
+  // that changes a submission's state (create, resubmit, discard,
+  // request revision, reject, publish) instead of duplicating the query
+  // selection at each call site — see src/lib/submissionsRepo.ts.
+  refreshSubmissions(): void;
 
   // ── accounts ──
   setSignName(v: string): void;
@@ -75,11 +180,13 @@ export interface AppActions {
   cancelEdit(): void;
   saveEdit(): void;
   saveEditAndPublish(): void;
+  resubmitOwnSubmission(): void;
 
   // ── my page ──
   setCircleDraft(v: string): void;
   addCircleEmail(): void;
   removeCircleEmail(email: string): void;
+  discardOwnSubmission(id: string): void;
 
   // ── cook from my cupboard ──
   setPantryQuery(v: string): void;
@@ -94,13 +201,12 @@ export interface AppActions {
 
   // ── admin queue ──
   publishSubmission(p: PendingSubmission): void;
-  loadIntoForm(src: PendingSubmission | AppState['recipes'][number], kind: 'pending' | 'recipe', reportId?: string | null): void;
+  loadIntoForm(src: PendingSubmission | AppState['recipes'][number], kind: 'pending' | 'mine' | 'recipe', reportId?: string | null): void;
   pickQueueReason(id: string, label: string): void;
   setQueueNote(id: string, v: string): void;
   approveSubmission(id: string): void;
   rejectSubmission(id: string): void;
   resendSubmission(id: string): void;
-  requeueRejected(id: string): void;
   dropRejected(id: string): void;
   dismissTakedown(id: string): void;
   removeTakedownRecipe(id: string, recipeId: string): void;
@@ -141,14 +247,96 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state);
   stateRef.current = state;
   const flashTimer = useRef<number | undefined>(undefined);
+  const pendingIntentRef = useRef<PendingAuthIntent>(null);
+
+  // Defined outside the actions useMemo (unlike everything else) because
+  // both `actions.refreshRecipes` and the onAuthStateChanged listener
+  // below need to call it — the listener already has a freshly-resolved
+  // identity in its own local scope at the moment auth changes, and must
+  // NOT read it back out of stateRef, which would still hold the
+  // *previous* signedIn/role/currentUser until the next render.
+  const flash = useCallback((msg: string) => {
+    setState((s) => ({ ...s, toast: msg }));
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setState((s) => ({ ...s, toast: '' })), 2600);
+  }, []);
+
+  // My own rating on every visible recipe — one get() per recipe rather
+  // than a collectionGroup query (see src/lib/ratingsRepo.ts). Chained
+  // after recipes finish loading, since it needs to know which recipe
+  // IDs are actually visible; a signed-out reader has none.
+  const applyMyRatingsFor = useCallback((ctx: VisibilityContext, recipes: Recipe[]) => {
+    if (!ctx.signedIn || !ctx.uid) { setState((s) => ({ ...s, myRatings: {} })); return; }
+    loadMyRatings(ctx.uid, recipes.map((r) => r.id))
+      .then((myRatings) => setState((s) => ({ ...s, myRatings })))
+      .catch((e) => console.error('[ratings] failed to load', e));
+  }, []);
+
+  const applyRecipesFor = useCallback((ctx: VisibilityContext) => {
+    setState((s) => ({ ...s, recipesLoading: true }));
+    loadVisibleRecipes(ctx)
+      .then((recipes) => {
+        setState((s) => ({ ...s, recipes, recipesLoading: false }));
+        applyMyRatingsFor(ctx, recipes);
+      })
+      .catch((e) => {
+        console.error('[recipes] failed to load', e);
+        setState((s) => ({ ...s, recipesLoading: false }));
+        flash('Could not load recipes. Please try refreshing the page.');
+      });
+  }, [flash, applyMyRatingsFor]);
+
+  // Same shape as applyRecipesFor: signed out clears both, a reader gets
+  // only their own submissions (mySubmissions), an editor additionally
+  // gets the moderation queue (pending/rejected) — Firestore rules would
+  // reject that second query for anyone else, so it's simply not run.
+  const applySubmissionsFor = useCallback((ctx: VisibilityContext) => {
+    if (!ctx.signedIn || !ctx.uid) {
+      setState((s) => ({ ...s, mySubmissions: [], pending: [], rejected: [], submissionsLoading: false }));
+      return;
+    }
+    setState((s) => ({ ...s, submissionsLoading: true }));
+    const mine = queryMySubmissions(ctx.uid).then((mySubmissions) => setState((s) => ({ ...s, mySubmissions })));
+    const queue = ctx.role === 'editor'
+      ? queryModerationQueue().then(({ pending, rejected }) => setState((s) => ({ ...s, pending, rejected })))
+      : Promise.resolve(setState((s) => ({ ...s, pending: [], rejected: [] })));
+    Promise.all([mine, queue])
+      .then(() => setState((s) => ({ ...s, submissionsLoading: false })))
+      .catch((e) => {
+        console.error('[submissions] failed to load', e);
+        setState((s) => ({ ...s, submissionsLoading: false }));
+        flash('Could not load your submissions. Please try refreshing the page.');
+      });
+  }, [flash]);
+
+  // Editor-only: the open reports queue. Unlike submissions/asks, a
+  // reader never has their own reports listed anywhere in the UI, so
+  // there's no "my reports" slice to load here.
+  const applyReportsFor = useCallback((ctx: VisibilityContext) => {
+    if (!ctx.signedIn || ctx.role !== 'editor') { setState((s) => ({ ...s, takedowns: [] })); return; }
+    queryOpenReports()
+      .then((takedowns) => setState((s) => ({ ...s, takedowns })))
+      .catch((e) => console.error('[reports] failed to load', e));
+  }, []);
+
+  // Same three-way split as recipes (Phase 1): everyone gets the
+  // published-for-everyone asks, a signed-in reader additionally gets
+  // their own, and an editor gets the full unconstrained queue instead
+  // of "their own" — Firestore rules would reject that query for anyone
+  // else. Called on every auth change, signed in or not, since the
+  // public slice has to be there for a signed-out FAQ page visit too.
+  const applyAsksFor = useCallback((ctx: VisibilityContext) => {
+    const pub = queryPublicAsks().then((publicAsks) => setState((s) => ({ ...s, publicAsks })));
+    const mine = (ctx.signedIn && ctx.uid)
+      ? queryMyAsks(ctx.uid).then((myAsks) => setState((s) => ({ ...s, myAsks })))
+      : Promise.resolve(setState((s) => ({ ...s, myAsks: [] })));
+    const editorQueue = (ctx.signedIn && ctx.role === 'editor')
+      ? queryAllAsksForEditor().then((asks) => setState((s) => ({ ...s, asks })))
+      : Promise.resolve(setState((s) => ({ ...s, asks: [] })));
+    Promise.all([pub, mine, editorQueue]).catch((e) => console.error('[asks] failed to load', e));
+  }, []);
 
   const actions = useMemo<AppActions>(() => {
-    const flash = (msg: string) => {
-      setState((s) => ({ ...s, toast: msg }));
-      window.clearTimeout(flashTimer.current);
-      flashTimer.current = window.setTimeout(() => setState((s) => ({ ...s, toast: '' })), 2600);
-    };
-
     const go = (page: PageKey) => {
       const s = stateRef.current;
       if (needsAccount(page) && (!s.signedIn || (page === 'admin' && s.role !== 'editor'))) {
@@ -162,8 +350,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       window.scrollTo(0, 0);
     };
 
+    // Firestore-backed comments/replies for one recipe, merged into the
+    // same extraComments/commentReplies state the mock used for
+    // session-only notes — see src/lib/commentsRepo.ts. Re-fetched (not
+    // patched locally) after every post, same convention as
+    // refreshRecipes/refreshSubmissions: Firestore is the one source of
+    // truth for the real id/timestamp a write produced.
+    const loadCommentsForRecipe = (id: string) => {
+      loadComments(id)
+        .then(({ comments, repliesByComment }) => setState((s) => ({
+          ...s,
+          extraComments: { ...s.extraComments, [id]: comments },
+          commentReplies: { ...s.commentReplies, ...repliesByComment },
+        })))
+        .catch((e) => console.error('[comments] failed to load', e));
+    };
+
     const openRecipe = (id: string) => {
       setState((s) => ({ ...s, page: 'recipe', recipeId: id, commentDraft: '' }));
+      loadCommentsForRecipe(id);
       window.scrollTo(0, 0);
     };
 
@@ -200,7 +405,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           submitter: anySrc.submitter || '', source: anySrc.source || '',
           nationality: anySrc.nationality === 'Not given' ? '' : (anySrc.nationality || ''),
           meal: anySrc.meal || 'Main dish',
-          language: anySrc.language || 'English',
           tastes: (anySrc.tastes || []).filter((t) => t !== 'Not given'),
           portions: anySrc.portions || 4, time: anySrc.time || 30, difficulty: anySrc.difficulty || 2,
           notes: anySrc.notes || '', access: accessOf(s, anySrc as never),
@@ -212,6 +416,30 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       window.scrollTo(0, 0);
     };
 
+    // A non-q.b. amount has to be a plain number — parseFloat's own
+    // "ignore trailing text" behaviour would otherwise silently accept
+    // something like "2 cups" as 2, or "a pinch" as 0.
+    const isValidAmount = (q: string) => {
+      const t = q.trim();
+      return t !== '' && Number.isFinite(Number(t)) && Number(t) >= 0;
+    };
+
+    // At least one step, and every non-q.b. amount — an ingredient's own
+    // amount, and how much of it each step uses — has to be a real
+    // number. Kept separate from the title/ingredient checks already at
+    // each call site below (rather than folded into one shared
+    // validator) so none of their existing wording has to change.
+    const stepsAndAmountsError = (form: FormState): string => {
+      if (!form.steps.some((st) => st.text.trim())) return 'Please write at least one step.';
+      if (form.ingredients.some((i) => i.n.trim() && !i.qb && !isValidAmount(i.q))) {
+        return 'Ingredient amounts must be a number (e.g. 400), unless marked q.b.';
+      }
+      if (form.steps.some((st) => st.uses.some((u) => !u.qb && !isValidAmount(u.q)))) {
+        return 'Step amounts must be a number (e.g. 400), unless marked q.b.';
+      }
+      return '';
+    };
+
     // The form's fields, cleaned up into the shape a submission or recipe uses.
     const formFields = (form: FormState, s: AppState) => {
       const filled = form.ingredients.filter((i) => i.n.trim());
@@ -220,7 +448,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         title: form.title.trim(), author: form.author.trim() || 'unknown',
         submitter: form.submitter.trim() || 'anonymous',
         nationality: form.nationality.trim() || 'Not given', meal: form.meal,
-        language: form.language,
         tastes: form.tastes.length ? form.tastes : ['Not given'],
         time: Number(form.time) || 30, difficulty: Number(form.difficulty) || 2,
         portions: Number(form.portions) || 4, source: form.source.trim(),
@@ -237,45 +464,89 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       };
     };
 
-    const publishSubmission = (p: PendingSubmission) => {
-      setState((s) => ({
-        ...s,
-        recipes: s.recipes.concat([{
-          id: p.id.replace('p-', 'r-'), title: p.title, author: p.author, submitter: p.submitter,
-          nationality: p.nationality, meal: p.meal, language: p.language || 'English', tastes: p.tastes, time: p.time,
-          difficulty: p.difficulty, rating: 0, votes: 0, date: TODAY, portions: p.portions,
-          source: p.source, blurb: p.blurb || p.summary, notes: p.notes || '',
-          access: p.access || 'public', ownerEmail: p.ownerEmail || '',
-          ingredients: p.ingredients?.length ? p.ingredients : [{ q: 0, u: '', n: 'See submitted sheet' }],
-          steps: p.steps?.length ? p.steps : ['Method as submitted by the contributor.'],
-          uses: p.uses || [], comments: [],
-          photos: p.photos || [], stepPhotos: p.stepPhotos || [], photoKey: p.photoKey || '',
-        }]),
-        pending: s.pending.filter((x) => x.id !== p.id),
-        rejected: s.rejected.filter((x) => x.id !== p.id),
-      }));
-      flash(`“${p.title}” is now live in the archive.`);
+    const refreshRecipesNow = () => {
+      const s = stateRef.current;
+      applyRecipesFor({ signedIn: s.signedIn, role: s.role, uid: s.currentUser?.uid ?? null, email: s.currentUser?.email ?? null });
+    };
+    const refreshSubmissionsNow = () => {
+      const s = stateRef.current;
+      applySubmissionsFor({ signedIn: s.signedIn, role: s.role, uid: s.currentUser?.uid ?? null, email: s.currentUser?.email ?? null });
+    };
+    const refreshReportsNow = () => {
+      const s = stateRef.current;
+      applyReportsFor({ signedIn: s.signedIn, role: s.role, uid: s.currentUser?.uid ?? null, email: s.currentUser?.email ?? null });
+    };
+    const refreshAsksNow = () => {
+      const s = stateRef.current;
+      applyAsksFor({ signedIn: s.signedIn, role: s.role, uid: s.currentUser?.uid ?? null, email: s.currentUser?.email ?? null });
     };
 
-    // reject → gone from the site; revise → waits in Pending revision.
-    const closeSubmission = (id: string, mode: 'reject' | 'revise') => {
+    // Editor-only. Creates the real recipes/{id} doc and removes the
+    // submission in one transaction (src/lib/submissionsRepo.ts), then
+    // refreshes both the public recipe list and the moderation queue so
+    // the change is visible immediately with no page reload.
+    const publishSubmission = (p: PendingSubmission) => {
+      const ownerUid = p.ownerUid;
+      if (!ownerUid) { flash('This submission is missing an owner and cannot be published.'); return; }
+      (async () => {
+        try {
+          await publishSubmissionOp({
+            id: p.id, title: p.title, author: p.author, submitter: p.submitter, nationality: p.nationality,
+            meal: p.meal, tastes: p.tastes, time: p.time, difficulty: p.difficulty,
+            portions: p.portions, source: p.source, notes: p.notes || '', access: p.access || 'public',
+            ownerUid, ownerEmail: p.ownerEmail || '',
+            ingredients: p.ingredients?.length ? p.ingredients : [{ q: 0, u: '', n: 'See submitted sheet' }],
+            steps: stepsToFirestore(
+              p.steps?.length ? p.steps : ['Method as submitted by the contributor.'],
+              p.uses || [], p.stepPhotos || [],
+            ),
+            photos: p.photos || [], blurb: p.blurb || p.summary,
+          });
+          flash(`“${p.title}” is now live in the archive.`);
+          refreshRecipesNow();
+          refreshSubmissionsNow();
+        } catch (e) {
+          console.error('[submissions] publish failed', e);
+          flash('Could not publish this recipe. Please try again.');
+        }
+      })();
+    };
+
+    // Editor-only. `from` says which queue bucket the item is coming
+    // from: 'pending' asks the editor for a reason first (as today);
+    // 'rejected' is "close without publishing" on an item already
+    // waiting for revision, which carries its existing reason/note
+    // through rather than asking again.
+    const decideSubmission = (id: string, decision: 'revise' | 'reject', from: 'pending' | 'rejected') => {
       const s = stateRef.current;
-      const p = s.pending.find((x) => x.id === id);
+      const p = (from === 'pending' ? s.pending : s.rejected).find((x) => x.id === id);
       if (!p) return;
-      const reason = s.queueReason[id];
-      if (!reason) { flash('Choose a reason first.'); return; }
-      const note = (s.queueNote[id] || '').trim();
-      const clear = (obj: Record<string, string>) => { const o = { ...obj }; delete o[id]; return o; };
-      if (mode === 'reject') {
-        setState((s2) => ({ ...s2, pending: s2.pending.filter((x) => x.id !== id), queueReason: clear(s2.queueReason), queueNote: clear(s2.queueNote) }));
-        flash(`“${p.title}” rejected — ${reason.toLowerCase()}. ${p.submitter} has been told why.`);
-        return;
+      const decidedBy = me(s).name || 'An editor';
+      let reason: string;
+      let note: string;
+      if (from === 'pending') {
+        reason = s.queueReason[id];
+        if (!reason) { flash('Choose a reason first.'); return; }
+        note = (s.queueNote[id] || '').trim();
+      } else {
+        reason = (p as RejectedSubmission).reason || 'Not revised';
+        note = (p as RejectedSubmission).note || '';
       }
-      const entry: RejectedSubmission = { ...p, status: 'Pending revision', reason, note, rejectedOn: TODAY, by: 'You' };
-      setState((s2) => ({ ...s2, pending: s2.pending.filter((x) => x.id !== id),
-        rejected: s2.rejected.filter((x) => x.id !== id).concat([entry]),
-        queueReason: clear(s2.queueReason), queueNote: clear(s2.queueNote) }));
-      flash(`Sent back to ${p.submitter} to revise. It waits in Pending revision.`);
+      const clear = (obj: Record<string, string>) => { const o = { ...obj }; delete o[id]; return o; };
+      (async () => {
+        try {
+          if (decision === 'revise') await requestRevision(id, decidedBy, reason, note);
+          else await rejectSubmissionOp(id, decidedBy, reason, note);
+          setState((s2) => ({ ...s2, queueReason: clear(s2.queueReason), queueNote: clear(s2.queueNote) }));
+          flash(decision === 'revise'
+            ? `Sent back to ${p.submitter} to revise. It waits in Pending revision.`
+            : `“${p.title}” rejected — ${reason.toLowerCase()}. ${p.submitter} has been told why.`);
+          refreshSubmissionsNow();
+        } catch (e) {
+          console.error('[submissions] decision failed', e);
+          flash('Could not save that decision. Please try again.');
+        }
+      })();
     };
 
     const saveAmendment = (publishAfter: boolean) => {
@@ -286,31 +557,111 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       if (!form.title.trim()) { setState((s2) => ({ ...s2, formStep: 1, formError: 'The recipe still needs a title.' })); return; }
       const v = formFields(form, s);
       if (!v.ingCount) { setState((s2) => ({ ...s2, formStep: 2, formError: 'Leave at least one ingredient on the list.' })); return; }
+      const amendStepsErr = stepsAndAmountsError(form);
+      if (amendStepsErr) { setState((s2) => ({ ...s2, formStep: 2, formError: amendStepsErr })); return; }
       if (t.kind === 'recipe') {
+        // The recipe content edit itself stays local-only — amending an
+        // already-published recipe isn't persisted yet, unchanged since
+        // Phase 2. Only the report this fix was for is real, so only its
+        // resolution is a Firestore write.
+        const reportId = t.reportId;
         setState((s2) => ({
           ...s2,
           recipes: s2.recipes.map((r) => (r.id === t.id ? { ...r, ...v, blurb: r.blurb, editedOn: TODAY, editedBy: 'You' } : r)),
-          takedowns: t.reportId ? s2.takedowns.filter((x) => x.id !== t.reportId) : s2.takedowns,
+          takedowns: reportId ? s2.takedowns.filter((x) => x.id !== reportId) : s2.takedowns,
           editTarget: null, formStep: 1, formError: '', page: 'recipe', recipeId: t.id,
         }));
-        flash(`New version of “${v.title}” saved.${t.reportId ? ' The reader who reported it has been told.' : ''}`);
+        flash(`New version of “${v.title}” saved.${reportId ? ' The reader who reported it has been told.' : ''}`);
         window.scrollTo(0, 0);
+        if (reportId) {
+          const closedBy = me(s).name || 'An editor';
+          resolveReport(reportId, closedBy).catch((e) => { console.error('[reports] resolve failed', e); refreshReportsNow(); });
+        }
         return;
       }
-      const base = s.pending.find((x) => x.id === t.id) || ({ id: t.id } as PendingSubmission);
-      const updated: PendingSubmission = { ...base, ...v,
-        ownerEmail: base.ownerEmail || v.ownerEmail,
-        summary: `${v.ingCount} ingredients and ${v.stepCount} steps. ${v.notes || 'No notes added.'}`,
-        flag: 'Amended by an editor.' };
-      setState((s2) => ({ ...s2, pending: s2.pending.map((x) => (x.id === t.id ? updated : x)),
-        editTarget: null, formStep: 1, formError: '', page: 'admin' }));
-      if (publishAfter) publishSubmission(updated);
-      else flash(`Your changes to “${v.title}” are saved. It is still waiting for approval.`);
+      // t.kind === 'pending' — an editor amending someone else's queued
+      // submission, either keeping it in the queue or publishing it
+      // straight away with the amended content.
+      const base = s.pending.find((x) => x.id === t.id);
+      if (!base) { flash('This submission is no longer in the queue.'); setState((s2) => ({ ...s2, editTarget: null, page: 'admin' })); return; }
+      const ownerUid = base.ownerUid;
+      if (!ownerUid) { flash('This submission is missing an owner and cannot be amended.'); return; }
+      const content = contentFromFormFields(v, `${v.ingCount} ingredients and ${v.stepCount} steps. ${v.notes || 'No notes added.'}`, 'Amended by an editor.');
+      setState((s2) => ({ ...s2, editTarget: null, formStep: 1, formError: '', page: 'admin' }));
       window.scrollTo(0, 0);
+      (async () => {
+        try {
+          if (publishAfter) {
+            await publishSubmissionOp({
+              id: base.id, title: v.title, author: v.author, submitter: v.submitter, nationality: v.nationality,
+              meal: v.meal, tastes: v.tastes, time: v.time, difficulty: v.difficulty,
+              portions: v.portions, source: v.source, notes: v.notes, access: v.access,
+              ownerUid, ownerEmail: base.ownerEmail || v.ownerEmail,
+              ingredients: content.ingredients, steps: content.steps, photos: content.photos,
+              blurb: v.notes || `Submitted by ${v.submitter}.`,
+            });
+            flash(`“${v.title}” is now live in the archive.`);
+            refreshRecipesNow();
+          } else {
+            await amendSubmissionContent(base.id, content);
+            flash(`Your changes to “${v.title}” are saved. It is still waiting for approval.`);
+          }
+          refreshSubmissionsNow();
+        } catch (e) {
+          console.error('[submissions] amend failed', e);
+          flash('Could not save your changes. Please try again.');
+        }
+      })();
+    };
+
+    // The reader's own path: editing and resubmitting a needs_revision
+    // submission of theirs. Firestore rules only allow this exact
+    // needs_revision → pending transition on a document the caller owns.
+    const resubmitOwnSubmission = () => {
+      const s = stateRef.current;
+      const t = s.editTarget;
+      if (!t || t.kind !== 'mine') return;
+      const form = s.form;
+      if (!form.title.trim()) { setState((s2) => ({ ...s2, formStep: 1, formError: 'The recipe still needs a title.' })); return; }
+      const v = formFields(form, s);
+      if (!v.ingCount) { setState((s2) => ({ ...s2, formStep: 2, formError: 'Leave at least one ingredient on the list.' })); return; }
+      const resubmitStepsErr = stepsAndAmountsError(form);
+      if (resubmitStepsErr) { setState((s2) => ({ ...s2, formStep: 2, formError: resubmitStepsErr })); return; }
+      const content = contentFromFormFields(v, `${v.ingCount} ingredients and ${v.stepCount} steps. ${v.notes || 'No notes added.'}`, '');
+      setState((s2) => ({ ...s2, editTarget: null, formStep: 1, formError: '', page: 'me' }));
+      window.scrollTo(0, 0);
+      (async () => {
+        try {
+          await resubmitSubmission(t.id, content);
+          flash(`“${v.title}” has been sent back for another look.`);
+          refreshSubmissionsNow();
+        } catch (e) {
+          console.error('[submissions] resubmit failed', e);
+          flash('Could not send your revised copy. Please try again.');
+        }
+      })();
+    };
+
+    const discardOwnSubmission = (id: string) => {
+      const s = stateRef.current;
+      const p = s.mySubmissions.find((x) => x.id === id);
+      if (!p) return;
+      (async () => {
+        try {
+          await discardSubmission(id);
+          flash(`“${p.title}” has been discarded.`);
+          refreshSubmissionsNow();
+        } catch (e) {
+          console.error('[submissions] discard failed', e);
+          flash('Could not discard this submission. Please try again.');
+        }
+      })();
     };
 
     return {
       go, openRecipe, flash,
+      refreshRecipes: refreshRecipesNow,
+      refreshSubmissions: refreshSubmissionsNow,
 
       setSignName: (v) => setState((s) => ({ ...s, signName: v })),
       setSignEmail: (v) => setState((s) => ({ ...s, signEmail: v })),
@@ -318,6 +669,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       toCreate: () => setState((s) => ({ ...s, signMode: 'new', signRole: 'reader', signError: '', signPass: '' })),
       toSignIn: () => setState((s) => ({ ...s, signMode: 'in', signError: '', signPass: '' })),
       pickSignRole: (role) => setState((s) => ({ ...s, signRole: role, signError: '' })),
+      // Both branches only ever call the Firebase SDK and do up-front
+      // client-side validation. The actual signedIn/currentUser/role state
+      // is set exactly once, by the onAuthStateChanged listener below —
+      // that is what makes it the source of truth rather than this
+      // function guessing at the outcome.
       doSignIn: () => {
         const s = stateRef.current;
         const email = s.signEmail.trim().toLowerCase();
@@ -325,32 +681,69 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (!name) { setState((s2) => ({ ...s2, signError: 'Give the name your notes should be signed with.' })); return; }
         if (email.indexOf('@') < 1) { setState((s2) => ({ ...s2, signError: 'That email address does not look complete.' })); return; }
         if (s.signPass.length < 8) { setState((s2) => ({ ...s2, signError: 'The password needs at least eight characters.' })); return; }
-        const found = s.accounts.find((a) => a.email === email);
+        const password = s.signPass;
+
         if (s.signMode === 'new') {
-          if (found) { setState((s2) => ({ ...s2, signMode: 'in', signError: 'There is already an account with that email. Sign in instead.' })); return; }
-          setState((s2) => ({ ...s2, accounts: s2.accounts.concat([{ email, pass: s2.signPass, name, role: 'reader', joined: TODAY }]),
-            signedIn: true, role: 'reader', signMode: 'in', signError: '', signPass: '',
-            myRatings: {}, circle: [], circleDraft: '', circleError: '',
-            pendingPage: '', page: s2.pendingPage || 'me' }));
-          window.scrollTo(0, 0);
-          flash(`Account created. You are signed in as ${name}.`);
+          pendingIntentRef.current = { type: 'signup', pendingPage: s.pendingPage };
+          setState((s2) => ({ ...s2, signError: '' }));
+          (async () => {
+            let cred;
+            try {
+              cred = await createUserWithEmailAndPassword(auth, email, password);
+            } catch (e) {
+              pendingIntentRef.current = null;
+              const code = (e as { code?: string } | null)?.code || '';
+              setState((s2) => ({ ...s2, signError: mapAuthError(e), signMode: code === 'auth/email-already-in-use' ? 'in' : s2.signMode }));
+              return;
+            }
+            try {
+              await updateProfile(cred.user, { displayName: name });
+              // role is hardcoded 'reader' here — never taken from any
+              // user input, so the (nonexistent, at signup) role picker
+              // can't influence it. The Firestore rules independently
+              // enforce the same thing.
+              await setDoc(doc(db, 'users', cred.user.uid), {
+                displayName: name, email, role: 'reader', createdAt: serverTimestamp(), circleEmails: [],
+              });
+              setState((s2) => ({ ...s2, signPass: '' }));
+            } catch {
+              // The Auth account exists but its profile doesn't — leaving
+              // it would strand the email as "already in use" with no way
+              // to finish setting it up, so undo the account and let them
+              // retry cleanly instead.
+              pendingIntentRef.current = null;
+              await cred.user.delete().catch(() => {});
+              setState((s2) => ({ ...s2, signError: 'We could not finish setting up your account. Please try again.' }));
+            }
+          })();
           return;
         }
-        if (!found) { setState((s2) => ({ ...s2, signError: 'There is no account with that email address yet. Choose “Create an account” and you will be given a reader account.' })); return; }
-        if (found.pass !== s.signPass) { setState((s2) => ({ ...s2, signError: 'That password does not match the account.' })); return; }
-        if (s.signRole === 'editor' && found.role !== 'editor') { setState((s2) => ({ ...s2, signError: 'That is a reader account. Editor accounts are given out by the editors themselves.' })); return; }
-        const dest: PageKey = s.pendingPage || (found.role === 'editor' ? 'admin' : 'me');
-        setState((s2) => ({ ...s2, signedIn: true, role: found.role, signName: found.name, signError: '', signPass: '',
-          myRatings: {}, circle: found.seed ? ['marek@example.pt', 'diogo@example.pt'] : [],
-          circleDraft: '', circleError: '', pendingPage: '', page: dest }));
-        window.scrollTo(0, 0);
-        flash(`Signed in as ${found.name}.`);
+
+        // Existing account. The "Signing in as reader / editor" picker
+        // above is purely cosmetic here — Firestore's users/{uid}.role is
+        // read fresh in the listener and used regardless of what was
+        // picked; a mismatch is never treated as a sign-in failure.
+        pendingIntentRef.current = { type: 'signin', pendingPage: s.pendingPage };
+        setState((s2) => ({ ...s2, signError: '' }));
+        (async () => {
+          try {
+            await signInWithEmailAndPassword(auth, email, password);
+            setState((s2) => ({ ...s2, signPass: '' }));
+          } catch (e) {
+            pendingIntentRef.current = null;
+            setState((s2) => ({ ...s2, signError: mapAuthError(e) }));
+          }
+        })();
       },
       signOut: () => {
-        setState((s) => ({ ...s, signedIn: false, role: 'reader', page: 'home', signPass: '', pendingPage: '',
-          signName: '', signEmail: '', myRatings: {} }));
-        flash('Signed out. You can still search, read and print.');
+        pendingIntentRef.current = { type: 'signout' };
+        firebaseSignOut(auth).catch(() => { pendingIntentRef.current = null; });
       },
+      // addEditor/demoteEditor still operate on the mocked `accounts` list
+      // (src/data/accounts.ts) — a demo backdrop for the Admin page, not
+      // real authorization. They cannot grant or revoke anyone's actual
+      // editor role, which lives only in their own users/{uid} Firestore
+      // doc. Wiring this to Firestore is a separate, later step.
       setEditorDraft: (v) => setState((s) => ({ ...s, editorDraft: v, editorError: '' })),
       addEditor: () => {
         const s = stateRef.current;
@@ -373,43 +766,96 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const list = s.f.tasteList || [];
         return { ...s, f: { ...s.f, tasteList: list.indexOf(taste) === -1 ? list.concat([taste]) : list.filter((x) => x !== taste) } };
       }),
-      clearFilters: () => setState((s) => ({ ...s, f: { q: '', nationality: 'All', meal: 'All', language: 'All', author: 'All', since: 'Any time', rating: 'Any', time: 'Any', difficulty: 'Any', sort: 'Highest rated', tasteList: [] } })),
+      clearFilters: () => setState((s) => ({ ...s, f: { q: '', nationality: 'All', meal: 'All', author: 'All', since: 'Any time', rating: 'Any', time: 'Any', difficulty: 'Any', sort: 'Highest rated', tasteList: [] } })),
 
       incPortions: (id, base) => setState((s) => ({ ...s, portionsById: { ...s.portionsById, [id]: Math.min(24, (s.portionsById[id] || base) + 1) } })),
       decPortions: (id, base) => setState((s) => ({ ...s, portionsById: { ...s.portionsById, [id]: Math.max(1, (s.portionsById[id] || base) - 1) } })),
       setMyRating: (id, n) => {
-        setState((s) => ({ ...s, myRatings: { ...s.myRatings, [id]: n } }));
-        flash(`Rating saved — ${n} out of 5. No note needed.`);
+        const s = stateRef.current;
+        if (!s.currentUser) { flash('Please sign in to rate this recipe.'); return; }
+        const uid = s.currentUser.uid;
+        (async () => {
+          try {
+            await rateRecipe(id, uid, n);
+            setState((s2) => ({ ...s2, myRatings: { ...s2.myRatings, [id]: n } }));
+            flash(`Rating saved — ${n} out of 5. No note needed.`);
+            // The recipe's own displayed rating/votes moved too (see
+            // src/lib/ratingsRepo.ts's transaction) — refresh so it shows
+            // without a reload, same convention as every other mutation.
+            refreshRecipesNow();
+          } catch (e) {
+            console.error('[ratings] save failed', e);
+            flash('Could not save your rating. Please try again.');
+          }
+        })();
       },
       clearMyRating: (id) => {
-        setState((s) => { const m = { ...s.myRatings }; delete m[id]; return { ...s, myRatings: m }; });
-        flash('Your rating has been removed.');
+        const s = stateRef.current;
+        if (!s.currentUser) return;
+        const uid = s.currentUser.uid;
+        (async () => {
+          try {
+            await clearRating(id, uid);
+            setState((s2) => { const m = { ...s2.myRatings }; delete m[id]; return { ...s2, myRatings: m }; });
+            flash('Your rating has been removed.');
+            refreshRecipesNow();
+          } catch (e) {
+            console.error('[ratings] remove failed', e);
+            flash('Could not remove your rating. Please try again.');
+          }
+        })();
       },
       setCommentDraft: (v) => setState((s) => ({ ...s, commentDraft: v })),
       postComment: (id) => {
         const s = stateRef.current;
         const t = s.commentDraft.trim();
         if (!t) { flash('Write something first.'); return; }
-        setState((s2) => ({ ...s2, extraComments: { ...s2.extraComments, [id]: (s2.extraComments[id] || []).concat([{ by: me(s2).name, when: 'just now', text: t, rating: s2.myRatings[id] || 0 }]) }, commentDraft: '' }));
-        flash('Your note has been added.');
+        if (!s.currentUser) { flash('Please sign in to add a note.'); return; }
+        const { uid, displayName } = s.currentUser;
+        (async () => {
+          try {
+            await postCommentOp(id, uid, displayName, t);
+            setState((s2) => ({ ...s2, commentDraft: '' }));
+            loadCommentsForRecipe(id);
+            flash('Your note has been added.');
+          } catch (e) {
+            console.error('[comments] post failed', e);
+            flash('Could not add your note. Please try again.');
+          }
+        })();
       },
       toggleReplyBox: (commentKey) => {
         if (!stateRef.current.signedIn) return;
         setState((s) => ({ ...s, openReplies: { ...s.openReplies, [commentKey]: !s.openReplies[commentKey] } }));
       },
       setReplyDraft: (commentKey, v) => setState((s) => ({ ...s, replyDrafts: { ...s.replyDrafts, [commentKey]: v } })),
+      // `commentKey` is now the comment's real Firestore document ID
+      // (see loadComments/toComment in src/lib/commentsRepo.ts) rather
+      // than the old `${recipeId}__${index}` synthetic key — replying is
+      // only ever offered on the recipe currently open, so its id comes
+      // from state.recipeId rather than needing its own parameter.
       postReply: (commentKey) => {
         const s = stateRef.current;
-        if (!s.signedIn) return;
+        if (!s.currentUser) return;
         const t = (s.replyDrafts[commentKey] || '').trim();
         if (!t) { flash('Write something first.'); return; }
-        setState((s2) => ({
-          ...s2,
-          commentReplies: { ...s2.commentReplies, [commentKey]: (s2.commentReplies[commentKey] || []).concat([{ by: me(s2).name, when: 'just now', text: t }]) },
-          replyDrafts: { ...s2.replyDrafts, [commentKey]: '' },
-          openReplies: { ...s2.openReplies, [commentKey]: false },
-        }));
-        flash('Your reply has been added.');
+        const recipeId = s.recipeId;
+        const { uid, displayName } = s.currentUser;
+        (async () => {
+          try {
+            await postReplyOp(recipeId, commentKey, uid, displayName, t);
+            setState((s2) => ({
+              ...s2,
+              replyDrafts: { ...s2.replyDrafts, [commentKey]: '' },
+              openReplies: { ...s2.openReplies, [commentKey]: false },
+            }));
+            loadCommentsForRecipe(recipeId);
+            flash('Your reply has been added.');
+          } catch (e) {
+            console.error('[comments] reply failed', e);
+            flash('Could not add your reply. Please try again.');
+          }
+        })();
       },
       toggleSelect,
       printPage: () => window.print(),
@@ -419,14 +865,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setReportText: (v) => setState((s) => ({ ...s, reportText: v })),
       sendReport: (id) => {
         const s = stateRef.current;
+        if (!s.currentUser) { flash('Please sign in to send a report.'); return; }
         const r = s.recipes.find((x) => x.id === id);
         const reason = s.reportText.trim() || 'No detail given.';
         const kind = s.reportKind;
-        setState((s2) => ({ ...s2, reportOpen: false, reportText: '',
-          takedowns: s2.takedowns.concat([{ id: `t${Date.now()}`, recipeId: id, title: r?.title || '', by: me(s2).name || 'A reader', kind, reason }]) }));
-        flash(kind === 'Should be taken down'
-          ? 'Takedown request sent to the editors.'
-          : 'Thank you — the editors will look at this correction.');
+        const { uid, displayName } = s.currentUser;
+        setState((s2) => ({ ...s2, reportOpen: false, reportText: '' }));
+        (async () => {
+          try {
+            await createReport(id, r?.title || '', uid, displayName, kind, reason);
+            refreshReportsNow();
+            flash(kind === 'Should be taken down'
+              ? 'Takedown request sent to the editors.'
+              : 'Thank you — the editors will look at this correction.');
+          } catch (e) {
+            console.error('[reports] send failed', e);
+            flash('Could not send your report. Please try again.');
+          }
+        })();
       },
 
       setFormField: setF,
@@ -461,6 +917,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const filledIng = s.form.ingredients.filter((i) => i.n.trim());
         if (s.formStep === 1 && !s.form.title.trim()) { setState((s2) => ({ ...s2, formError: 'Please give the recipe a title before continuing.' })); return; }
         if (s.formStep === 2 && !filledIng.length) { setState((s2) => ({ ...s2, formError: 'Please list at least one ingredient before continuing.' })); return; }
+        if (s.formStep === 2) {
+          const stepsErr = stepsAndAmountsError(s.form);
+          if (stepsErr) { setState((s2) => ({ ...s2, formError: stepsErr })); return; }
+        }
         setState((s2) => ({ ...s2, formStep: s2.formStep + 1, formError: '' }));
         window.scrollTo(0, 0);
       },
@@ -472,26 +932,28 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const steps = form.steps.filter((st) => st.text.trim());
         if (!form.title.trim()) { setState((s2) => ({ ...s2, formStep: 1, formError: 'Please give the recipe a title.' })); return; }
         if (!filledIng.length) { setState((s2) => ({ ...s2, formStep: 2, formError: 'Please list at least one ingredient.' })); return; }
+        const stepsErr = stepsAndAmountsError(form);
+        if (stepsErr) { setState((s2) => ({ ...s2, formStep: 2, formError: stepsErr })); return; }
+        if (!s.currentUser) { flash('Please sign in to submit a recipe.'); return; }
         const assignedCount = filledIng.length - filledIng.map((i) => i.n).filter((n) => !steps.some((st) => st.uses.some((u) => u.n === n))).length;
-        const entry: PendingSubmission = {
-          id: `p-${Date.now()}`, title: form.title.trim(), author: form.author.trim() || 'unknown',
-          submitter: form.submitter.trim() || 'anonymous', nationality: form.nationality.trim() || 'Not given',
-          meal: form.meal, language: form.language, tastes: form.tastes.length ? form.tastes : ['Not given'],
-          time: Number(form.time) || 30, difficulty: Number(form.difficulty) || 2,
-          portions: Number(form.portions) || 4, source: form.source.trim(), wait: 'Submitted just now',
-          access: form.access || 'public', ownerEmail: myEmail(s),
-          summary: `${filledIng.length} ingredients and ${steps.length} steps, with per-step amounts on ${assignedCount} of them. ${form.notes.trim() || 'No notes added.'}`,
-          flag: form.author.trim() ? '' : 'Needs checking: no author named.',
-          ingredients: filledIng.map((i) => (i.qb ? { q: 0, u: '', n: i.n, qb: true } : { q: parseFloat(i.q) || 0, u: i.u, n: i.n })),
-          steps: steps.map((st) => st.text.trim()),
-          uses: steps.map((st) => (st.uses || []).map((u) => (u.qb ? { q: 0, u: '', n: u.n, qb: true } : { q: parseFloat(u.q) || 0, u: u.u, n: u.n }))),
-          notes: form.notes.trim(),
-          photos: (form.photos || []).slice(0, 3),
-          stepPhotos: steps.map((st, i) => (st.photo ? (st.photoId || `step-${s.draftId}-${i + 1}`) : '')),
-          photoKey: s.draftId,
-          blurb: form.notes.trim() || `Submitted by ${form.submitter.trim() || 'a reader'}.`,
-        };
-        setState((s2) => ({ ...s2, pending: s2.pending.concat([entry]), formDone: true, lastTitle: entry.title, formError: '' }));
+        const title = form.title.trim();
+        const submitter = form.submitter.trim() || 'anonymous';
+        const content = contentFromFormFields(
+          formFields(form, s),
+          `${filledIng.length} ingredients and ${steps.length} steps, with per-step amounts on ${assignedCount} of them. ${form.notes.trim() || 'No notes added.'}`,
+          form.author.trim() ? '' : 'Needs checking: no author named.',
+        );
+        const owner = { uid: s.currentUser.uid, email: s.currentUser.email };
+        (async () => {
+          try {
+            await createSubmission(owner, submitter, content);
+            setState((s2) => ({ ...s2, formDone: true, lastTitle: title, formError: '' }));
+            refreshSubmissionsNow();
+          } catch (e) {
+            console.error('[submissions] create failed', e);
+            setState((s2) => ({ ...s2, formError: 'Could not send your recipe. Please try again.' }));
+          }
+        })();
         window.scrollTo(0, 0);
       },
       resetForm: () => {
@@ -501,27 +963,44 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       cancelEdit: () => {
         const t = stateRef.current.editTarget;
         setState((s) => ({ ...s, editTarget: null, formStep: 1, formError: '',
-          page: t && t.kind === 'recipe' ? 'recipe' : 'admin',
+          page: t && t.kind === 'recipe' ? 'recipe' : t && t.kind === 'mine' ? 'me' : 'admin',
           recipeId: t && t.kind === 'recipe' ? t.id : s.recipeId }));
         flash('Nothing was changed.');
         window.scrollTo(0, 0);
       },
       saveEdit: () => saveAmendment(false),
       saveEditAndPublish: () => saveAmendment(true),
+      resubmitOwnSubmission,
 
       setCircleDraft: (v) => setState((s) => ({ ...s, circleDraft: v, circleError: '' })),
       addCircleEmail: () => {
         const s = stateRef.current;
+        if (!s.currentUser) { setState((s2) => ({ ...s2, circleError: 'Please sign in first.' })); return; }
         const v = (s.circleDraft || '').trim().toLowerCase();
         if (!v || v.indexOf('@') < 1 || v.indexOf('.') < 0) { setState((s2) => ({ ...s2, circleError: 'Please write a full email address.' })); return; }
         if (s.circle.indexOf(v) >= 0) { setState((s2) => ({ ...s2, circleError: `${v} is already on the list.` })); return; }
-        setState((s2) => ({ ...s2, circle: s2.circle.concat([v]), circleDraft: '', circleError: '' }));
-        flash(`${v} can now see your inner-circle recipes.`);
+        const next = s.circle.concat([v]);
+        setMyCircleEmails(s.currentUser.uid, next)
+          .then(() => {
+            setState((s2) => ({ ...s2, circle: next, circleDraft: '', circleError: '' }));
+            flash(`${v} can now see your inner-circle recipes.`);
+            refreshRecipesNow();
+          })
+          .catch(() => setState((s2) => ({ ...s2, circleError: 'Could not save that just now. Please try again.' })));
       },
       removeCircleEmail: (email) => {
-        setState((s) => ({ ...s, circle: s.circle.filter((x) => x !== email) }));
-        flash(`${email} can no longer see your inner-circle recipes.`);
+        const s = stateRef.current;
+        if (!s.currentUser) return;
+        const next = s.circle.filter((x) => x !== email);
+        setMyCircleEmails(s.currentUser.uid, next)
+          .then(() => {
+            setState((s2) => ({ ...s2, circle: next }));
+            flash(`${email} can no longer see your inner-circle recipes.`);
+            refreshRecipesNow();
+          })
+          .catch(() => flash('Could not save that just now. Please try again.'));
       },
+      discardOwnSubmission,
 
       setPantryQuery: (v) => setState((s) => ({ ...s, pantryQuery: v })),
       togglePantryOnly: () => setState((s) => ({ ...s, pantryOnlyComplete: !s.pantryOnlyComplete })),
@@ -547,25 +1026,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const p = stateRef.current.pending.find((x) => x.id === id);
         if (p) publishSubmission(p);
       },
-      rejectSubmission: (id) => closeSubmission(id, 'reject'),
-      resendSubmission: (id) => closeSubmission(id, 'revise'),
-      requeueRejected: (id) => {
-        const p = stateRef.current.rejected.find((x) => x.id === id);
-        if (!p) return;
-        setState((s) => ({ ...s, rejected: s.rejected.filter((x) => x.id !== id),
-          pending: s.pending.concat([{ ...p, wait: 'Revised copy received today', flag: `Revised after: ${p.reason}` }]) }));
-        flash(`“${p.title}” is back in Waiting for approval for a second read.`);
+      rejectSubmission: (id) => decideSubmission(id, 'reject', 'pending'),
+      resendSubmission: (id) => decideSubmission(id, 'revise', 'pending'),
+      dropRejected: (id) => decideSubmission(id, 'reject', 'rejected'),
+      dismissTakedown: (id) => {
+        const s = stateRef.current;
+        const closedBy = me(s).name || 'An editor';
+        setState((s2) => ({ ...s2, takedowns: s2.takedowns.filter((x) => x.id !== id) }));
+        dismissReport(id, closedBy)
+          .then(() => flash('Report closed with a reply. The recipe stays as it is.'))
+          .catch((e) => { console.error('[reports] dismiss failed', e); flash('Could not close that report. Please try again.'); refreshReportsNow(); });
       },
-      dropRejected: (id) => {
-        const p = stateRef.current.rejected.find((x) => x.id === id);
-        setState((s) => ({ ...s, rejected: s.rejected.filter((x) => x.id !== id) }));
-        if (p) flash(`“${p.title}” closed. ${p.submitter} has been told.`);
-      },
-      dismissTakedown: (id) => { setState((s) => ({ ...s, takedowns: s.takedowns.filter((x) => x.id !== id) })); flash('Report closed with a reply. The recipe stays as it is.'); },
       removeTakedownRecipe: (id, recipeId) => {
-        const t = stateRef.current.takedowns.find((x) => x.id === id);
-        setState((s) => ({ ...s, takedowns: s.takedowns.filter((x) => x.id !== id), recipes: s.recipes.filter((x) => x.id !== recipeId) }));
-        if (t) flash(`“${t.title}” has been deleted from the archive.`);
+        const s = stateRef.current;
+        const t = s.takedowns.find((x) => x.id === id);
+        const closedBy = me(s).name || 'An editor';
+        setState((s2) => ({ ...s2, takedowns: s2.takedowns.filter((x) => x.id !== id) }));
+        removeReportedRecipe(id, recipeId, closedBy)
+          .then(() => { if (t) flash(`“${t.title}” has been deleted from the archive.`); refreshRecipesNow(); })
+          .catch((e) => { console.error('[reports] recipe removal failed', e); flash('Could not delete that recipe. Please try again.'); refreshReportsNow(); });
       },
       fixTakedown: (recipeId, reportId) => {
         const r = stateRef.current.recipes.find((x) => x.id === recipeId);
@@ -581,10 +1060,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const s = stateRef.current;
         const text = s.askText.trim();
         if (text.length < 10) { setState((s2) => ({ ...s2, askError: 'Write a line or two so an editor can answer properly.' })); return; }
+        if (!s.currentUser) { setState((s2) => ({ ...s2, askError: 'Please sign in to send this.' })); return; }
         const subject = s.askSubject.trim() || text.split(/\s+/).slice(0, 6).join(' ');
-        setState((s2) => ({ ...s2, askSubject: '', askText: '', askError: '',
-          asks: s2.asks.concat([{ id: `a${Date.now()}`, kind: s2.askKind, subject, text, by: me(s2).name, sentOn: TODAY, status: 'Waiting', reply: '', repliedBy: '', repliedOn: '', published: false }]) }));
-        flash('Sent to the editors. The reply will appear on your page.');
+        const kind = s.askKind;
+        const { uid, displayName } = s.currentUser;
+        setState((s2) => ({ ...s2, askSubject: '', askText: '', askError: '' }));
+        (async () => {
+          try {
+            await createAsk(uid, displayName, kind, subject, text);
+            refreshAsksNow();
+            flash('Sent to the editors. The reply will appear on your page.');
+          } catch (e) {
+            console.error('[asks] send failed', e);
+            flash('Could not send your question. Please try again.');
+          }
+        })();
       },
       setAdminAskDraft: (id, v) => setState((s) => ({ ...s, askReply: { ...s.askReply, [id]: v } })),
       toggleAdminAskPublish: (id) => setState((s) => {
@@ -599,22 +1089,111 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const draft = s.askReply[id] === undefined ? a.reply : s.askReply[id];
         const willPublish = s.askPublish[id] === undefined ? a.published : s.askPublish[id];
         if (!draft.trim()) { flash('Write the reply first.'); return; }
-        setState((s2) => ({ ...s2, asks: s2.asks.map((x) => (x.id === id ? { ...x, status: 'Answered', reply: draft.trim(), repliedBy: 'Editor Whitcombe', repliedOn: TODAY, published: !!willPublish } : x)) }));
-        flash(willPublish
-          ? `Reply sent to ${a.by} and published on the questions page.`
-          : `Reply sent to ${a.by}.`);
+        const repliedBy = me(s).name || 'An editor';
+        replyToAsk(id, repliedBy, draft.trim(), !!willPublish)
+          .then(() => {
+            refreshAsksNow();
+            flash(willPublish ? `Reply sent to ${a.by} and published on the questions page.` : `Reply sent to ${a.by}.`);
+          })
+          .catch((e) => { console.error('[asks] reply failed', e); flash('Could not send that reply. Please try again.'); });
       },
       unpublishAdminAsk: (id) => {
         const a = stateRef.current.asks.find((x) => x.id === id);
-        setState((s) => ({ ...s, asks: s.asks.map((x) => (x.id === id ? { ...x, published: !x.published } : x)), askPublish: { ...s.askPublish, [id]: a ? !a.published : true } }));
-        if (a) flash(a.published ? 'Taken off the questions page.' : 'Published on the questions page.');
+        if (!a) return;
+        setAskPublished(id, !a.published)
+          .then(() => { refreshAsksNow(); flash(a.published ? 'Taken off the questions page.' : 'Published on the questions page.'); })
+          .catch((e) => { console.error('[asks] publish toggle failed', e); flash('Could not update that. Please try again.'); });
       },
       closeAdminAsk: (id) => {
-        setState((s) => ({ ...s, asks: s.asks.map((x) => (x.id === id ? { ...x, status: 'Closed' } : x)) }));
-        flash('Closed without a reply.');
+        closeAsk(id)
+          .then(() => { refreshAsksNow(); flash('Closed without a reply.'); })
+          .catch((e) => { console.error('[asks] close failed', e); flash('Could not close that. Please try again.'); });
       },
     };
-  }, []);
+  }, [flash, applyRecipesFor, applySubmissionsFor, applyReportsFor, applyAsksFor]);
+
+  // The single source of truth for signed-in state. Fires on explicit
+  // sign-in/sign-up/sign-out AND on a silent session restore when the
+  // page loads with an existing Firebase session — pendingIntentRef is
+  // how we tell those apart, so a page refresh never re-triggers a
+  // "Signed in as…" toast or an unwanted redirect.
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        const intent = pendingIntentRef.current;
+        pendingIntentRef.current = null;
+        setState((s) => ({ ...s, currentUser: null, signedIn: false, role: 'reader', authLoading: false }));
+        applyRecipesFor({ signedIn: false, role: 'reader', uid: null, email: null });
+        applySubmissionsFor({ signedIn: false, role: 'reader', uid: null, email: null });
+        applyReportsFor({ signedIn: false, role: 'reader', uid: null, email: null });
+        applyAsksFor({ signedIn: false, role: 'reader', uid: null, email: null });
+        if (intent?.type === 'signout') {
+          setState((s) => ({
+            ...s, page: 'home', signPass: '', pendingPage: '', signName: '', signEmail: '', myRatings: {},
+            // The contribute form and the editor's per-submission review
+            // drafts are scoped to whoever is signed in — without this, a
+            // second account signing in on the same tab could see the
+            // previous account's "sent for review" confirmation (title and
+            // all) or half-picked reject reasons.
+            formDone: false, formStep: 1, formError: '', lastTitle: '', editTarget: null,
+            form: freshForm(), draftId: `d${Date.now()}`, queueReason: {}, queueNote: {},
+            // The inner circle is real Firestore state now (see
+            // src/lib/usersRepo.ts), but state.circle is still just a
+            // local cache of it — cleared here so a second account
+            // signing in on the same tab doesn't briefly show the
+            // previous account's circle list under "My inner circle"
+            // before its own profile has loaded.
+            circle: [], circleDraft: '', circleError: '',
+          }));
+          actions.flash('Signed out. You can still search, read and print.');
+        }
+        return;
+      }
+
+      setState((s) => ({ ...s, authLoading: true }));
+      const intent = pendingIntentRef.current;
+      pendingIntentRef.current = null;
+
+      fetchUserProfile(user.uid, intent?.type === 'signup').then((result) => {
+        if (result.ok) {
+          const cu = result.profile;
+          setState((s) => ({
+            ...s, currentUser: cu, signedIn: true, role: cu.role, authLoading: false, signName: cu.displayName,
+            // Inner circle now lives on the user's own profile doc — see
+            // src/lib/usersRepo.ts. Populated fresh on every sign-in
+            // rather than trusted from whatever was left over locally.
+            circle: cu.circleEmails, circleDraft: '', circleError: '',
+          }));
+          applyRecipesFor({ signedIn: true, role: cu.role, uid: cu.uid, email: cu.email });
+          applySubmissionsFor({ signedIn: true, role: cu.role, uid: cu.uid, email: cu.email });
+          applyReportsFor({ signedIn: true, role: cu.role, uid: cu.uid, email: cu.email });
+          applyAsksFor({ signedIn: true, role: cu.role, uid: cu.uid, email: cu.email });
+          if (intent?.type === 'signup') {
+            setState((s) => ({ ...s, pendingPage: '', page: intent.pendingPage || 'me' }));
+            actions.flash(`Account created. You are signed in as ${cu.displayName}.`);
+            window.scrollTo(0, 0);
+          } else if (intent?.type === 'signin') {
+            const dest: PageKey = intent.pendingPage || (cu.role === 'editor' ? 'admin' : 'me');
+            setState((s) => ({ ...s, pendingPage: '', page: dest }));
+            actions.flash(`Signed in as ${cu.displayName} (${cu.role}).`);
+            window.scrollTo(0, 0);
+          }
+          return;
+        }
+
+        // Authenticated with Firebase, but users/{uid} could not be read
+        // or genuinely doesn't exist — do NOT assume a role. Sign back
+        // out so the app doesn't sit in a signed-in-but-unknown-role
+        // state, and say so plainly.
+        if (intent) {
+          setState((s) => ({ ...s, signError: 'We could not load your account profile. Please try again, or contact an editor if this keeps happening.' }));
+        }
+        actions.flash('We could not load your account profile. Please try signing in again.');
+        firebaseSignOut(auth).catch(() => {});
+      });
+    });
+    return unsubscribe;
+  }, [actions, applyRecipesFor, applySubmissionsFor, applyReportsFor, applyAsksFor]);
 
   const value = useMemo(() => ({ state, actions }), [state, actions]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

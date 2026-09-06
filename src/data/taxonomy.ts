@@ -1,12 +1,10 @@
 export const TASTES = [
-  'Sweet', 'Sour', 'Salty', 'Bitter', 'Umami', 'Spicy', 'Smoky', 'Tangy',
-  'Creamy', 'Fruity', 'Nutty', 'Earthy', 'Herbal',
+  'Spicy', 'Vegan', 'Vegetarian', 'Gluten-free', 'Dairy-free', 'Nut-free',
+  'High-protein', 'Low-carb', 'Healthy', 'Quick', 'Budget-friendly', 'One-pot',
 ];
 
 export const MEALS = [
-  'Breakfast', 'Starter', 'Main dish', 'Side dish', 'Dessert', 'Baking', 'Snack', 'Drink',
+  'Breakfast', 'Starter', 'Soup', 'Main dish', 'Side dish', 'Dessert', 'Baking', 'Snack', 'Drink',
 ];
-
-export const LANGUAGES = ['Portuguese', 'English'] as const;
 
 export const TODAY = '2026-08-15';

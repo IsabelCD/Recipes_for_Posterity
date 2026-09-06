@@ -1,14 +1,15 @@
 import { getApps, getApp, initializeApp, type FirebaseOptions } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { connectAuthEmulator, getAuth } from 'firebase/auth';
+import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore';
 
 // Firebase client setup. Config comes from Vite env vars (see .env.example)
 // rather than being hardcoded, and .env.local (the file that actually holds
 // real values) is gitignored.
 //
-// This module only wires up the SDK connection — the app still runs on the
-// mocked state in src/state/AppStateContext.tsx. Nothing here is consumed
-// by the UI yet.
+// Every Firestore/Auth read and write in the app goes through this module's
+// `auth`/`db` exports — always via one of the src/lib/*Repo.ts service
+// files (or AppStateContext.tsx's own sign-in/sign-up/sign-out calls),
+// never directly from a page or component.
 //
 // Deliberately not initializing Firebase Storage: this app has no use for
 // it yet, and every unused service is one more thing to configure security
@@ -27,7 +28,6 @@ if (import.meta.env.DEV) {
     .filter(([, value]) => !value)
     .map(([key]) => key);
   if (missing.length) {
-    // eslint-disable-next-line no-console
     console.warn(
       `[firebase] Missing config value(s): ${missing.join(', ')}. ` +
       'Copy .env.example to .env.local and fill in your Firebase project\'s web app config.',
@@ -41,3 +41,19 @@ if (import.meta.env.DEV) {
 export const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Point at the local emulators (ports match firebase.json) in dev, unless
+// explicitly opted out via VITE_USE_FIREBASE_EMULATORS=false — e.g. to
+// test against the real project without deploying. Never runs in a
+// production build. Guarded against Vite HMR re-running this module and
+// trying to connect a second time, which both SDKs throw on.
+declare global {
+  var __firebaseEmulatorsConnected: boolean | undefined;
+}
+
+if (import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS !== 'false' && !globalThis.__firebaseEmulatorsConnected) {
+  globalThis.__firebaseEmulatorsConnected = true;
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  console.info('[firebase] Using local emulators (Auth :9099, Firestore :8080). Set VITE_USE_FIREBASE_EMULATORS=false to use the real project instead.');
+}

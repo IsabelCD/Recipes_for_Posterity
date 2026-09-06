@@ -5,8 +5,7 @@ import { dateLabel } from '../state/helpers';
 
 export function FaqPage() {
   const { state, actions } = useApp();
-  const publicAsks = state.asks
-    .filter((a) => a.status === 'Answered' && a.published)
+  const publicAsks = state.publicAsks
     .slice()
     .sort((a, b) => (b.repliedOn || '').localeCompare(a.repliedOn || ''));
 

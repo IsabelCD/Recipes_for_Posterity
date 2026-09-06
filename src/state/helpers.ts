@@ -1,4 +1,4 @@
-import type { Access } from '../types';
+import type { Access, Recipe } from '../types';
 
 export function stars(n: number): string {
   const k = Math.round(n);
@@ -52,4 +52,19 @@ export function isBasic(name: string): boolean {
 
 export function accessWords(a: Access): string {
   return a === 'owner' ? 'Only me' : a === 'circle' ? 'My inner circle' : 'Everyone';
+}
+
+// A plain-text version of a recipe (title, ingredients, method), handed
+// straight to Google Translate's text tool via URL params. Recipes are
+// always submitted in English now (see src/types.ts), so the source
+// language is fixed. This app has no per-recipe URL for Google's own
+// page-translate proxy to fetch — it's a client-only SPA with a single
+// static shell, never server-rendered per recipe — so translating the
+// recipe's own text directly is what actually works here, rather than
+// pointing Google at a page it could only see empty.
+export function translateUrl(r: Recipe): string {
+  const ingredientLines = r.ingredients.map((i) => (i.qb ? `q.b. ${i.n}` : `${i.q}${i.u ? ` ${i.u}` : ''} ${i.n}`.trim()));
+  const stepLines = r.steps.map((text, i) => `${i + 1}. ${text}`);
+  const text = [r.title, '', 'Ingredients:', ...ingredientLines, '', 'Method:', ...stepLines].join('\n');
+  return `https://translate.google.com/?sl=en&tl=pt&text=${encodeURIComponent(text)}&op=translate`;
 }

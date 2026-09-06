@@ -3,7 +3,7 @@ import { ImageSlot } from '../components/ImageSlot';
 import { CmykNumeral } from '../components/CmykNumeral';
 import { ReportDialog } from '../components/ReportDialog';
 import { activeRecipe, accessOf, myRatingFor } from '../state/selectors';
-import { mealIcon, stars, timeText, dateLabel, host, fmt, accessWords } from '../state/helpers';
+import { mealIcon, stars, timeText, dateLabel, host, fmt, accessWords, translateUrl } from '../state/helpers';
 
 export function RecipeBlockedPage() {
   const { state, actions } = useApp();
@@ -45,7 +45,6 @@ export function RecipePage() {
               <i className={`ph-duotone ${mealIcon(r.meal)}`} style={{ fontSize: 15, color: 'var(--color-accent-700)' }} aria-hidden="true" />{r.meal}
             </span>
             <span className="tag tag-outline" style={{ whiteSpace: 'nowrap' }}>{r.tastes.join(' · ')}</span>
-            <span className="tag tag-neutral">{r.language}</span>
             {restricted && <span className="tag tag-accent-2">{accessWords(accessOf(state, r))}</span>}
           </div>
           <h1 style={{ fontSize: 56, lineHeight: 1, letterSpacing: '-0.03em', margin: '0 0 16px', maxWidth: '20ch' }}>{r.title}</h1>
@@ -166,11 +165,16 @@ export function RecipePage() {
             </div>
             <p style={{ fontSize: 15, margin: '0 0 20px', maxWidth: '58ch' }} className="text-muted">Substitutions, timings, what went wrong. Notes stay attached to the recipe for whoever cooks it next.</p>
             {comments.map((c, i) => {
-              const commentKey = `${r.id}__${i}`;
-              const replies = state.commentReplies[commentKey] || [];
-              const replyOpen = !!state.openReplies[commentKey];
+              // Only a Firestore-backed comment (Phase 3+) has a real
+              // document id — a seeded legacy comment has none and so
+              // has nowhere for a reply to live yet (see
+              // src/lib/commentsRepo.ts). It still displays exactly as
+              // before, just without the reply affordance.
+              const commentKey = c.id;
+              const replies = commentKey ? (state.commentReplies[commentKey] || []) : [];
+              const replyOpen = !!commentKey && !!state.openReplies[commentKey];
               return (
-                <div key={i} style={{ padding: '16px 0', borderBottom: '1px solid var(--color-divider)' }}>
+                <div key={commentKey || i} style={{ padding: '16px 0', borderBottom: '1px solid var(--color-divider)' }}>
                   <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', marginBottom: 4 }}>
                     <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 16 }}>{c.by}</span>
                     <span style={{ fontSize: 13 }} className="text-muted">{c.when}</span>
@@ -181,7 +185,7 @@ export function RecipePage() {
                   {replies.length > 0 && (
                     <div style={{ marginTop: 12, paddingLeft: 20, borderLeft: '2px solid var(--color-divider)', display: 'flex', flexDirection: 'column', gap: 10 }}>
                       {replies.map((rp, j) => (
-                        <div key={j}>
+                        <div key={rp.id || j}>
                           <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', marginBottom: 2 }}>
                             <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 14 }}>{rp.by}</span>
                             <span style={{ fontSize: 12 }} className="text-muted">{rp.when}</span>
@@ -192,7 +196,7 @@ export function RecipePage() {
                     </div>
                   )}
 
-                  {state.signedIn && (
+                  {!!commentKey && state.signedIn && (
                     <div style={{ marginTop: 10 }}>
                       <button className="btn btn-ghost" onClick={() => actions.toggleReplyBox(commentKey)} style={{ paddingLeft: 0, fontSize: 13 }}>
                         {replyOpen ? 'Cancel' : 'Reply'}
@@ -246,6 +250,7 @@ export function RecipePage() {
                 {inList ? '✓ In your shopping list — remove' : `Add these ${portions} portions to my shopping list`}
               </button>
               <button className="btn btn-secondary" onClick={actions.printPage} style={{ margin: 0 }}>Print this recipe</button>
+              <a className="btn btn-secondary" href={translateUrl(r)} target="_blank" rel="noreferrer" style={{ margin: 0, textAlign: 'center' }}>Translate to Portuguese</a>
             </div>
             <div data-print-keep className="print-keep" style={{ paddingTop: 22 }}>
               <h6 style={{ margin: '0 0 6px' }}>At a glance</h6>
@@ -254,7 +259,7 @@ export function RecipePage() {
                 { k: 'Time', v: timeText(r.time) },
                 { k: 'Difficulty', v: `${r.difficulty} of 5` },
                 { k: 'Who can see it', v: accessWords(accessOf(state, r)) },
-                { k: 'Taste', v: r.tastes.join(', ') },
+                { k: 'Tags', v: r.tastes.join(', ') },
                 { k: 'Added', v: dateLabel(r.date) },
               ].map((ft) => (
                 <div key={ft.k} style={{ display: 'grid', gridTemplateColumns: '96px minmax(0,1fr)', gap: 10, fontSize: 14, padding: '6px 0', borderBottom: '1px solid var(--color-divider)' }}>
@@ -269,7 +274,11 @@ export function RecipePage() {
               </div>
             )}
             <div className="print-hide" style={{ paddingTop: 24 }}>
-              <button className="btn btn-ghost" onClick={actions.openReport} style={{ paddingLeft: 0, color: 'var(--color-accent-2)' }}>Tell an editor something is wrong</button>
+              {state.signedIn ? (
+                <button className="btn btn-ghost" onClick={actions.openReport} style={{ paddingLeft: 0, color: 'var(--color-accent-2)' }}>Tell an editor something is wrong</button>
+              ) : (
+                <button className="btn btn-ghost" onClick={() => actions.go('signin')} style={{ paddingLeft: 0, color: 'var(--color-accent-2)' }}>Sign in to tell an editor something is wrong</button>
+              )}
               <p style={{ fontSize: 13, margin: '4px 0 0' }} className="text-muted">A wrong ingredient, a quantity that does not work, a missing step, a wrong credit — or a request to take the recipe down.</p>
             </div>
           </div>

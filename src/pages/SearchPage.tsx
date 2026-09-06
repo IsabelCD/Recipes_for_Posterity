@@ -1,5 +1,5 @@
 import { useApp } from '../state/AppStateContext';
-import { TASTES, MEALS, LANGUAGES } from '../data/taxonomy';
+import { TASTES, MEALS } from '../data/taxonomy';
 import { filtered, visibleRecipes, accessOf } from '../state/selectors';
 import { mealIcon, stars, timeText, dateLabel, accessWords } from '../state/helpers';
 
@@ -24,7 +24,6 @@ export function SearchPage() {
     if (f.q) bits.push(`“${f.q}”`);
     if (f.nationality !== 'All') bits.push(f.nationality);
     if (f.meal !== 'All') bits.push(f.meal);
-    if (f.language !== 'All') bits.push(f.language);
     if (tasteList.length) bits.push(tasteList.join(' + '));
     if (f.author !== 'All') bits.push(`by ${f.author}`);
     if (f.since !== 'Any time') bits.push(f.since.toLowerCase());
@@ -60,13 +59,7 @@ export function SearchPage() {
             </select>
           </div>
           <div className="field">
-            <label>Language</label>
-            <select className="input" value={f.language} onChange={(e) => actions.setFilter('language', e.target.value)}>
-              {['All'].concat(LANGUAGES).map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label>Taste</label>
+            <label>Tags</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {TASTES.map((t) => {
                 const on = tasteList.indexOf(t) !== -1;
@@ -158,7 +151,6 @@ export function SearchPage() {
                       <i className={`ph-duotone ${mealIcon(r.meal)}`} style={{ fontSize: 15, color: 'var(--color-accent-700)' }} aria-hidden="true" />{r.meal}
                     </span>
                     <span className="tag tag-outline" style={{ whiteSpace: 'nowrap' }}>{r.tastes.join(' · ')}</span>
-                    <span className="tag tag-neutral">{r.language}</span>
                   </div>
                   <a
                     href="#"

@@ -1,6 +1,6 @@
 import { useApp } from '../state/AppStateContext';
 import { ImageSlot } from '../components/ImageSlot';
-import { MEALS, TASTES, LANGUAGES } from '../data/taxonomy';
+import { MEALS, TASTES } from '../data/taxonomy';
 import { ACCESS_OPTIONS } from '../data/content';
 import { me } from '../state/selectors';
 
@@ -26,9 +26,13 @@ export function ContributePage() {
             {state.lastTitle ? `“${state.lastTitle}” has been sent` : 'Your recipe has been sent'}
           </h1>
           <p style={{ fontSize: 18, lineHeight: 1.55 }}>It is now in the editors' queue. One of them reads every submission before it appears in the archive, usually within three days. Nothing is published until it has been checked.</p>
-          <p style={{ fontSize: 18, lineHeight: 1.55 }} className="text-muted">You can see it waiting on the approval queue page.</p>
+          <p style={{ fontSize: 18, lineHeight: 1.55 }} className="text-muted">
+            {state.role === 'editor' ? 'You can see it waiting on the approval queue page.' : 'You can see it waiting on your page.'}
+          </p>
           <div style={{ display: 'flex', gap: 12, marginTop: 22 }}>
-            <button className="btn btn-primary" onClick={() => actions.go('admin')}>See the queue</button>
+            {state.role === 'editor'
+              ? <button className="btn btn-primary" onClick={() => actions.go('admin')}>See the queue</button>
+              : <button className="btn btn-primary" onClick={() => actions.go('me')}>Go to my page</button>}
             <button className="btn btn-secondary" onClick={actions.resetForm}>Add another recipe</button>
           </div>
         </div>
@@ -42,7 +46,14 @@ export function ContributePage() {
         <>
           <h6 style={{ color: 'var(--color-accent)', margin: '0 0 10px' }}>Contribute</h6>
           <h1 style={{ fontSize: 44, lineHeight: 1.04, letterSpacing: '-0.03em', margin: '0 0 10px' }}>Add a recipe</h1>
-          <p style={{ fontSize: 16, maxWidth: '58ch', margin: '0 0 28px' }} className="text-muted">Three short pages of questions. Only the title and one ingredient are required — leave anything else blank if you do not know it. Nothing is published until an editor has read it.</p>
+          <p style={{ fontSize: 16, maxWidth: '58ch', margin: '0 0 28px' }} className="text-muted">Three short pages of questions. Only the title, one ingredient and one step are required — leave anything else blank if you do not know it. Nothing is published until an editor has read it.</p>
+        </>
+      ) : t.kind === 'mine' ? (
+        <>
+          <h6 style={{ color: 'var(--color-accent-2)', margin: '0 0 10px' }}>Sending a revised copy</h6>
+          <h1 style={{ fontSize: 44, lineHeight: 1.04, letterSpacing: '-0.03em', margin: '0 0 10px' }}>Revise “{t.title}”</h1>
+          <p style={{ fontSize: 16, maxWidth: '64ch', margin: '0 0 20px' }} className="text-muted">Fix what the editor asked for, then send it again. It goes back to the waiting-for-approval queue.</p>
+          <p style={{ fontSize: 15, maxWidth: '64ch', margin: '0 0 28px' }}>Everything is on the same three pages as the submission form. You can send from any page — a typo does not need the whole form again.</p>
         </>
       ) : (
         <>
@@ -93,25 +104,8 @@ export function ContributePage() {
               {MEALS.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
-          <div className="field">
-            <label>What language is it written in?</label>
-            <div className="seg">
-              {LANGUAGES.map((lang) => (
-                <button
-                  key={lang}
-                  type="button"
-                  className="seg-opt"
-                  aria-pressed={form.language === lang}
-                  onClick={() => actions.setFormField('language', lang)}
-                  style={form.language === lang ? { background: 'var(--color-accent)', color: 'var(--color-bg)' } : undefined}
-                >
-                  {lang}
-                </button>
-              ))}
-            </div>
-          </div>
           <div className="field" style={{ gridColumn: '1 / -1' }}>
-            <label>How does it taste? Pick as many as apply</label>
+            <label>Which tags apply? Pick as many as fit</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {TASTES.map((tt) => {
                 const on = form.tastes.indexOf(tt) !== -1;
@@ -305,8 +299,7 @@ export function ContributePage() {
                 { k: 'Original link', v: form.source || 'none' },
                 { k: 'Nationality', v: form.nationality || 'not filled in' },
                 { k: 'Type of meal', v: form.meal },
-                { k: 'Language', v: form.language },
-                { k: 'Taste', v: form.tastes.length ? form.tastes.join(', ') : 'not filled in' },
+                { k: 'Tags', v: form.tastes.length ? form.tastes.join(', ') : 'not filled in' },
                 { k: 'Portions', v: String(form.portions) },
                 { k: 'Time', v: `${form.time} minutes` },
                 { k: 'Difficulty', v: `${form.difficulty} of 5` },
@@ -345,6 +338,7 @@ export function ContributePage() {
             <button className="btn btn-secondary" onClick={actions.saveEdit}>Save, keep in the queue</button>
           </>
         )}
+        {t?.kind === 'mine' && <button className="btn btn-primary" onClick={actions.resubmitOwnSubmission}>Send the revised copy</button>}
         {t?.kind === 'recipe' && <button className="btn btn-primary" onClick={actions.saveEdit}>Save the new version</button>}
         {!!t && <button className="btn btn-ghost" onClick={actions.cancelEdit} style={{ color: 'var(--color-accent-2)' }}>Cancel</button>}
         <span className="text-muted" style={{ fontSize: 14, marginLeft: 6 }}>

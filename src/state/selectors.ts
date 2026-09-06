@@ -1,11 +1,12 @@
 import type { AppState, Access, Recipe, Me } from '../types';
-import { OWNERS, SEED_ACCESS, SEED_CIRCLES } from '../data/accounts';
-import { ME } from '../data/recipes';
-import { TODAY } from '../data/taxonomy';
+import { OWNERS, SEED_ACCESS } from '../data/accounts';
 import { ingKey, isBasic } from './helpers';
 
+// The real, authenticated identity — Firebase Auth's email, not a form
+// field. See src/state/AppStateContext.tsx for how currentUser is kept in
+// sync with onAuthStateChanged + users/{uid}.
 export function myEmail(state: AppState): string {
-  return state.signedIn ? (state.signEmail || '').trim().toLowerCase() : '';
+  return (state.currentUser?.email || '').trim().toLowerCase();
 }
 
 export function accessOf(_state: AppState, r: Recipe): Access {
@@ -16,11 +17,12 @@ export function ownerEmailOf(_state: AppState, r: Recipe): string {
   return (r.ownerEmail || OWNERS[r.submitter] || '').toLowerCase();
 }
 
-export function circleOf(state: AppState, email: string): string[] {
-  if (email && email === myEmail(state)) return state.circle;
-  return SEED_CIRCLES[email] || [];
-}
-
+// Phase 5: a recipe's own `circleEmails` (persisted on the recipe doc
+// itself, kept in sync with the owner's inner circle by
+// src/lib/usersRepo.ts's setMyCircleEmails — see firestore.rules'
+// isCircleSync()) is now the single source of truth for who is in an
+// owner's circle, replacing the old per-owner lookup this used to do
+// against local-only mock state.
 export function canSee(state: AppState, r: Recipe): boolean {
   if (state.signedIn && state.role === 'editor') return true;
   const acc = accessOf(state, r);
@@ -30,20 +32,19 @@ export function canSee(state: AppState, r: Recipe): boolean {
   const owner = ownerEmailOf(state, r);
   if (owner && owner === me) return true;
   if (acc !== 'circle') return false;
-  return circleOf(state, owner).map((e) => e.trim().toLowerCase()).indexOf(me) !== -1;
+  return (r.circleEmails || []).map((e) => e.trim().toLowerCase()).indexOf(me) !== -1;
 }
 
 export function visibleRecipes(state: AppState): Recipe[] {
   return state.recipes.filter((r) => canSee(state, r));
 }
 
-// The person currently signed in. Only the seeded account carries a
-// history; an account created in this session starts empty.
+// The person currently signed in, from Firebase Auth + their users/{uid}
+// profile. Real accounts have no seeded rating history — that was a
+// property of the old mocked accounts, not something Firebase carries.
 export function me(state: AppState): Me {
-  if (!state.signedIn) return { name: '', joined: TODAY, ratingsGiven: {} };
-  const acc = state.accounts.find((a) => a.email === (state.signEmail || '').trim().toLowerCase());
-  if (acc?.seed) return ME;
-  return { name: state.signName || acc?.name || '', joined: acc?.joined || TODAY, ratingsGiven: {} };
+  if (!state.currentUser) return { name: '', joined: '', ratingsGiven: {} };
+  return { name: state.currentUser.displayName, joined: state.currentUser.createdAt, ratingsGiven: {} };
 }
 
 export function portionsFor(state: AppState, r: Recipe): number {
@@ -68,7 +69,6 @@ export function filtered(state: AppState): Recipe[] {
     }
     if (f.nationality !== 'All' && r.nationality !== f.nationality) return false;
     if (f.meal !== 'All' && r.meal !== f.meal) return false;
-    if (f.language !== 'All' && r.language !== f.language) return false;
     if (f.author !== 'All' && r.author !== f.author) return false;
     if (f.since !== 'Any time') {
       const days = f.since === 'Last 30 days' ? 30 : f.since === 'Last 90 days' ? 90 : 365;
@@ -156,7 +156,17 @@ export function myRatedIds(state: AppState): string[] {
     .filter((id) => state.recipes.some((r) => r.id === id));
 }
 
+// A submitted-by-you match used to key on the free-text `submitter`
+// display name, which only worked when it happened to be typed exactly
+// as the account's display name (it doesn't have to be — it's a credit
+// line, not an identity field; see src/lib/submissionsRepo.ts). Every
+// recipe published since Phase 2 carries the real ownerUid from the
+// submission it came from, so that's checked first; the seeded recipes
+// from before real accounts existed have no ownerUid and fall back to
+// the name match, which is harmless since they're credited to fictional
+// cooks no real account could ever match.
 export function myContributions(state: AppState): Recipe[] {
+  const uid = state.currentUser?.uid;
   const n = me(state).name;
-  return n ? state.recipes.filter((r) => r.submitter === n) : [];
+  return state.recipes.filter((r) => (r.ownerUid ? r.ownerUid === uid : !!n && r.submitter === n));
 }

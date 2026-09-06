@@ -22,9 +22,10 @@ export function MyPage() {
   const contribNotes = mine.reduce((a, r) => a + (r.comments || []).length + (state.extraComments[r.id] || []).length, 0);
   const bestContribution = mine.slice().sort((a, b) => b.rating - a.rating)[0];
 
-  const needsWork = state.rejected.filter((p) => p.submitter === person.name);
-  const waiting = state.pending.filter((p) => p.submitter === person.name);
-  const myAsks = state.asks.filter((a) => a.by === person.name).slice().sort((a, b) => (b.sentOn || '').localeCompare(a.sentOn || ''));
+  const needsWork = state.mySubmissions.filter((p) => p.status === 'needs_revision');
+  const turnedDown = state.mySubmissions.filter((p) => p.status === 'rejected');
+  const waiting = state.mySubmissions.filter((p) => p.status === 'pending');
+  const myAsks = state.myAsks.slice().sort((a, b) => (b.sentOn || '').localeCompare(a.sentOn || ''));
 
   return (
     <div className="page" style={{ maxWidth: 1180 }}>
@@ -137,7 +138,7 @@ export function MyPage() {
       {needsWork.length > 0 && (
         <div style={{ marginTop: 34, padding: '16px 18px', background: 'var(--color-accent-100)', maxWidth: '74ch' }}>
           <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 17, marginBottom: 4 }}>Needs something from you</div>
-          <p style={{ fontSize: 14, margin: '0 0 10px' }} className="text-muted">Submissions an editor has sent back or turned down. Fix what they asked for and send it again.</p>
+          <p style={{ fontSize: 14, margin: '0 0 10px' }} className="text-muted">Submissions an editor has sent back. Fix what they asked for and send it again, or discard the draft.</p>
           {needsWork.map((w) => (
             <div key={w.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 170px', gap: 20, padding: '12px 0', borderTop: '1px solid var(--color-divider)', alignItems: 'start' }}>
               <div>
@@ -148,9 +149,34 @@ export function MyPage() {
                 <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 19 }}>{w.title}</div>
                 <div style={{ fontSize: 14 }} className="text-muted">Written down from {w.author}</div>
                 {!!w.note && <div style={{ fontSize: 14, lineHeight: 1.5, fontStyle: 'italic', marginTop: 5, maxWidth: '60ch' }}>“{w.note}”</div>}
-                <div style={{ fontSize: 13, marginTop: 5 }} className="text-muted">Sent back to you {dateLabel(w.rejectedOn)} by {w.by}</div>
+                {!!w.decidedOn && <div style={{ fontSize: 13, marginTop: 5 }} className="text-muted">Sent back to you {dateLabel(w.decidedOn)} by {w.decidedBy}</div>}
               </div>
-              <a className="btn btn-secondary" href="#" onClick={(e) => { e.preventDefault(); actions.go('contribute'); }}>Send a revised copy</a>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <a className="btn btn-secondary" href="#" onClick={(e) => { e.preventDefault(); actions.loadIntoForm(w, 'mine'); }}>Send a revised copy</a>
+                <button className="btn btn-ghost" onClick={() => actions.discardOwnSubmission(w.id)} style={{ color: 'var(--color-accent-2)' }}>Discard this draft</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {turnedDown.length > 0 && (
+        <div style={{ marginTop: 34, padding: '16px 18px', background: 'var(--color-neutral-200)', maxWidth: '74ch' }}>
+          <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 17, marginBottom: 4 }}>Turned down</div>
+          <p style={{ fontSize: 14, margin: '0 0 10px' }} className="text-muted">Submissions an editor decided not to publish. You can discard these whenever you like.</p>
+          {turnedDown.map((w) => (
+            <div key={w.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 170px', gap: 20, padding: '12px 0', borderTop: '1px solid var(--color-divider)', alignItems: 'start' }}>
+              <div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 6 }}>
+                  <span className="tag tag-neutral">Rejected</span>
+                  <span className="tag tag-outline">{w.reason}</span>
+                </div>
+                <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 19 }}>{w.title}</div>
+                <div style={{ fontSize: 14 }} className="text-muted">Written down from {w.author}</div>
+                {!!w.note && <div style={{ fontSize: 14, lineHeight: 1.5, fontStyle: 'italic', marginTop: 5, maxWidth: '60ch' }}>“{w.note}”</div>}
+                {!!w.decidedOn && <div style={{ fontSize: 13, marginTop: 5 }} className="text-muted">Rejected {dateLabel(w.decidedOn)} by {w.decidedBy}</div>}
+              </div>
+              <button className="btn btn-ghost" onClick={() => actions.discardOwnSubmission(w.id)} style={{ color: 'var(--color-accent-2)' }}>Discard</button>
             </div>
           ))}
         </div>

@@ -1,6 +1,5 @@
 export type Access = 'public' | 'circle' | 'owner';
 export type Role = 'reader' | 'editor';
-export type Language = 'Portuguese' | 'English';
 
 export interface Ingredient {
   q: number;
@@ -14,12 +13,18 @@ export interface RecipeComment {
   when: string;
   text: string;
   rating?: number;
+  // Present only for a Firestore-backed comment (Phase 3+) — its real
+  // document ID, used to key its replies and drafts. Absent on the
+  // recipe's seeded `comments` array, which has no document behind it
+  // and so cannot receive new replies.
+  id?: string;
 }
 
 export interface CommentReply {
   by: string;
   when: string;
   text: string;
+  id?: string;
 }
 
 export interface Recipe {
@@ -29,7 +34,6 @@ export interface Recipe {
   submitter: string;
   nationality: string;
   meal: string;
-  language: Language;
   tastes: string[];
   time: number;
   difficulty: number;
@@ -45,7 +49,9 @@ export interface Recipe {
   uses: Ingredient[][];
   comments: RecipeComment[];
   access?: Access;
+  ownerUid?: string | null;
   ownerEmail?: string;
+  circleEmails?: string[];
   photos?: string[];
   stepPhotos?: string[];
   photoKey?: string;
@@ -60,7 +66,6 @@ export interface PendingSubmission {
   submitter: string;
   nationality: string;
   meal: string;
-  language: Language;
   tastes: string[];
   time: number;
   difficulty: number;
@@ -73,6 +78,7 @@ export interface PendingSubmission {
   steps: string[];
   uses: Ingredient[][];
   access?: Access;
+  ownerUid?: string;
   ownerEmail?: string;
   notes?: string;
   blurb?: string;
@@ -89,9 +95,31 @@ export interface RejectedSubmission extends PendingSubmission {
   by: string;
 }
 
+// A submission's real state in Firestore — see src/lib/submissionsRepo.ts.
+// 'pending' waits in the editor queue; 'needs_revision' has been sent back
+// to the submitter to fix; 'rejected' is a terminal editor decision the
+// submitter may still discard. Nothing is ever silently deleted by an
+// editor — only the owner discards a needs_revision/rejected submission.
+export type SubmissionStatus = 'pending' | 'needs_revision' | 'rejected';
+
+// The single Firestore-backed shape used everywhere a submission is read
+// as "my own", across all three statuses — MyPage filters one array of
+// these into its buckets instead of trusting a submitter-name string
+// match. The editor's moderation queue (state.pending / state.rejected)
+// still uses PendingSubmission/RejectedSubmission, unchanged, since that
+// UI already branches on which array an item is in rather than a status
+// field.
+export interface Submission extends PendingSubmission {
+  ownerUid: string;
+  status: SubmissionStatus;
+  reason?: string;
+  note?: string;
+  decidedBy?: string;
+  decidedOn?: string;
+}
+
 export interface Account {
   email: string;
-  pass: string;
   name: string;
   role: Role;
   joined: string;
@@ -171,7 +199,6 @@ export interface FormState {
   source: string;
   nationality: string;
   meal: string;
-  language: Language;
   tastes: string[];
   portions: number | string;
   time: number | string;
@@ -187,7 +214,6 @@ export interface Filters {
   q: string;
   nationality: string;
   meal: string;
-  language: string;
   author: string;
   since: string;
   rating: string;
@@ -198,7 +224,10 @@ export interface Filters {
 }
 
 export type EditTarget = {
-  kind: 'pending' | 'recipe';
+  // 'pending' — an editor amending someone else's queued submission.
+  // 'mine' — the owning reader editing their own needs_revision submission
+  // to resubmit it. 'recipe' — amending an already-published recipe.
+  kind: 'pending' | 'mine' | 'recipe';
   id: string;
   title: string;
   reportId: string | null;
@@ -214,11 +243,25 @@ export interface Me {
   ratingsGiven: Record<string, number>;
 }
 
+// The signed-in identity, sourced from Firebase Auth + the user's own
+// users/{uid} Firestore doc. Firestore's `role` is the single source of
+// truth for authorization — see src/state/AppStateContext.tsx.
+export interface CurrentUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  role: Role;
+  createdAt: string;
+  circleEmails: string[];
+}
+
 export interface AppState {
   page: PageKey;
   recipeId: string;
   signedIn: boolean;
   role: Role;
+  currentUser: CurrentUser | null;
+  authLoading: boolean;
   pendingPage: PageKey | '';
   signRole: Role;
   signMode: 'in' | 'new';
@@ -230,7 +273,19 @@ export interface AppState {
   editorDraft: string;
   editorError: string;
   recipes: Recipe[];
+  recipesLoading: boolean;
+  // The editor moderation queue — everyone's pending/needs_revision
+  // submissions. Only ever populated for a signed-in editor; Firestore
+  // rules would reject the underlying query for anyone else. See
+  // src/lib/submissionsRepo.ts.
   pending: PendingSubmission[];
+  // The current reader's OWN submissions, any status — used by MyPage.
+  // Loaded via where('ownerUid','==',uid), which is what a reader is
+  // actually allowed to query.
+  mySubmissions: Submission[];
+  submissionsLoading: boolean;
+  // The editor moderation queue for reports — open ones only, everyone's.
+  // Only ever populated for a signed-in editor. See src/lib/reportsRepo.ts.
   takedowns: Takedown[];
   f: Filters;
   circle: string[];
@@ -254,7 +309,14 @@ export interface AppState {
   reportOpen: boolean;
   reportText: string;
   reportKind: string;
+  // The editor's unconstrained view of every ask (AdminPage) — unchanged
+  // shape/name from the mock. "My own asks" and "published for everyone"
+  // are now separate Firestore-backed slices, since a reader is never
+  // allowed the unconstrained query this one relies on. See
+  // src/lib/asksRepo.ts.
   asks: Ask[];
+  myAsks: Ask[];
+  publicAsks: Ask[];
   askKind: string;
   askSubject: string;
   askText: string;

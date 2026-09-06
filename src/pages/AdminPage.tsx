@@ -37,7 +37,7 @@ export function AdminPage() {
               </div>
               <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 24, lineHeight: 1.15, marginBottom: 4 }}>{p.title}</div>
               <div style={{ fontSize: 14, marginBottom: 8 }} className="text-muted">
-                Author: {p.author} · submitted by {p.submitter} · {p.portions} portions · {timeText(p.time)} · difficulty {p.difficulty} of 5 · written in {p.language || 'English'} · visible to: {accessWords((p.access || 'public') as Access).toLowerCase()}
+                Author: {p.author} · submitted by {p.submitter} · {p.portions} portions · {timeText(p.time)} · difficulty {p.difficulty} of 5 · visible to: {accessWords((p.access || 'public') as Access).toLowerCase()}
               </div>
               <div style={{ fontSize: 15, lineHeight: 1.5, maxWidth: '64ch' }}>{p.summary}</div>
               {!!p.source && <div style={{ fontSize: 14, marginTop: 6 }}>Submitted link: <a href={p.source} target="_blank" rel="noreferrer">{host(p.source)}</a></div>}
@@ -83,7 +83,7 @@ export function AdminPage() {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 22, alignItems: 'baseline', paddingBottom: 10, borderBottom: '1px solid var(--color-text)' }}>
           <h2 style={{ margin: 0, fontSize: 26 }}>Pending revision</h2>
           <span className="tag tag-neutral">{state.rejected.length}</span>
-          <span style={{ fontSize: 14 }} className="text-muted">Sent back to the submitter, waiting for a reply. When the revised copy arrives it returns to Waiting for approval.</span>
+          <span style={{ fontSize: 14 }} className="text-muted">Sent back to the submitter, waiting for a reply. When they resubmit it returns here to Waiting for approval on its own.</span>
         </div>
         {state.rejected.map((p) => (
           <div key={p.id} className="rejected-row">
@@ -99,7 +99,6 @@ export function AdminPage() {
               <div style={{ fontSize: 13, marginTop: 6 }} className="text-muted">Sent back {dateLabel(p.rejectedOn)} by {p.by} · no reply yet</div>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button className="btn btn-primary" onClick={() => actions.requeueRejected(p.id)}>Revised copy received</button>
               <button className="btn btn-ghost" onClick={() => actions.dropRejected(p.id)} style={{ color: 'var(--color-accent-2)' }}>Close without publishing</button>
             </div>
           </div>

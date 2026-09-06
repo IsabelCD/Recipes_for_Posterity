@@ -45,20 +45,57 @@ design-reference/           the original Claude Design output — kept as
                              reference only, not used by the app at runtime
 ```
 
-## Mocked authentication and data
+## Firebase backend
 
-There is no backend. Everything lives in memory for the lifetime of the
-browser tab, seeded from `src/data/*`:
+Authentication and data are real, backed by Firebase Auth + Cloud Firestore
+(see `src/lib/firebase.ts` for setup, `firestore.rules` for access control,
+and `src/lib/*Repo.ts` for the one service module per collection that every
+read/write goes through — nothing outside those files calls Firestore or
+Auth directly). `src/state/AppStateContext.tsx` holds UI state and wires
+user actions to those repo calls; it is not a mock backend itself.
 
-- **Accounts** are a plaintext array in `src/data/accounts.ts` (seeded) plus
-  any created at runtime — see `doSignIn` in `src/state/AppStateContext.tsx`.
-  This is fine for a prototype and must **not** be reused as-is once a real
-  backend (e.g. Firebase Auth) is added.
-- **Recipes, pending submissions, questions, takedowns** — `src/data/*.ts`,
-  mutated only in memory via the actions in `AppStateContext.tsx`.
-- Nothing persists across a page reload by design (no localStorage, no
-  cookies) — this keeps the mock model honest about what will need real
-  persistence later.
+Firestore-backed, real, and durable across reloads:
+- **Accounts** — Firebase Auth for identity, `users/{uid}` for `displayName`,
+  `role`, and `circleEmails` (the source of truth for authorization; a
+  reader can never grant themselves the editor role).
+- **Recipes** — `recipes/{id}`, including the `public`/`circle`/`owner`
+  visibility split and the rating aggregate.
+- **Submissions** — `submissions/{id}`: the pending → needs_revision/rejected
+  → published lifecycle.
+- **Ratings, comments, replies** — `recipes/{id}/ratings/*`,
+  `recipes/{id}/comments/*` and their `replies` subcollection.
+- **Reports and asks** — `reports/{id}` and `asks/{id}`.
+
+Still local/mock by design, not a gap to close later:
+- **Pantry and shopping list** (`pantry`, `selected`, `ticked` in app state)
+  — session-only, out of scope for Firestore persistence for now.
+- **Photo "uploads"** — the contribute form's photo slots are placeholder
+  IDs only; no file ever leaves the browser, and there is no Firebase
+  Storage integration.
+- **The Admin page's "Editors" list** (`src/data/accounts.ts`'s
+  `INITIAL_ACCOUNTS`) — a cosmetic demo list so the page has something to
+  show; adding or removing a "mocked editor" there never touches anyone's
+  real `role`.
+
+## Security Rules tests
+
+`tests/*.rules.test.ts` runs against a real local Firestore emulator (never
+production — every test uses a `demo-`-prefixed project id, which the
+Firebase SDKs specifically refuse to route anywhere but an emulator):
+
+```bash
+npm run test:rules   # starts the emulator, runs every tests/*.test.ts file, tears it down
+npm run seed:emulator # separately: seed src/data/recipes.ts into a running emulator
+```
+
+## Local development against the emulators
+
+`npm run dev` connects to the local Auth + Firestore emulators by default
+(see `src/lib/firebase.ts`) whenever the app is built in dev mode — this
+never happens in a production build (`npm run build`), where the emulator
+connection code is compiled out entirely rather than just skipped at
+runtime. Set `VITE_USE_FIREBASE_EMULATORS=false` in `.env.local` to point a
+dev server at the real Firebase project instead.
 
 ## Images
 

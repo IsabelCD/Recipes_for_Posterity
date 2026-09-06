@@ -24,7 +24,7 @@ export const PAGES: NavPage[] = [
 export const PURPOSES = [
   { title: 'Keeps recipes in one place', body: 'Written down properly, with real quantities, so they can be cooked again years from now.' },
   { title: 'Credits the cook', body: 'The person who invented a recipe is named, even when somebody else submits it.' },
-  { title: 'Searches by what you want', body: 'Nationality, type of meal, taste, author, date, rating, time and difficulty.' },
+  { title: 'Searches by what you want', body: 'Nationality, type of meal, tags, author, date, rating, time and difficulty.' },
   { title: 'Checked before publishing', body: 'An editor reads every submission. Only editors can delete a recipe.' },
 ];
 

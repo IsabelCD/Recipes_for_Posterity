@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_STORAGE_BUCKET: string;
   readonly VITE_FIREBASE_MESSAGING_SENDER_ID: string;
   readonly VITE_FIREBASE_APP_ID: string;
+  /** Set to "false" to use the real Firebase project in dev instead of the emulators. Defaults to using the emulators. */
+  readonly VITE_USE_FIREBASE_EMULATORS?: string;
 }
 
 interface ImportMeta {
